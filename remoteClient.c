@@ -12,6 +12,7 @@ void main(int argc, char *argv[])
 {
     int port, sock, i;
     char buf[256];
+    char *line;
     struct sockaddr_in server;
     struct sockaddr *serverptr = (struct sockaddr *)&server;
     struct hostent *rem;
@@ -39,9 +40,11 @@ void main(int argc, char *argv[])
     printf("Connecting to %s port %d\n", argv[1], port);
     do
     {
-        printf("Give input string:");
-        fgets(buf, sizeof(buf), stdin); /* Read from stdin */
-        for (i = 0; buf[i] != '\0 '; i++)
+        printf("Give input string: ");
+        line = fgets(buf, sizeof(buf), stdin); /* Read from stdin */
+        if (line == NULL)
+            break;
+        for (i = 0; buf[i] != '\0'; i++)
         { /* For every char */
             /* Send i-th character */
             if (write(sock, buf + i, 1) < 0)
@@ -51,7 +54,7 @@ void main(int argc, char *argv[])
                 perror_exit("read");
         }
         printf("Received string: %s", buf);
-    } while (strcmp(buf,"END \n") != 0); /* Finish on"end"*/
+    } while (strcmp(buf,"END\n") != 0); /* Finish on"end"*/
     close(sock);                            /* Close socket and exit */
 }
 void perror_exit(char *message)

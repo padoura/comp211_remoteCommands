@@ -11,10 +11,11 @@
 #include <netinet/in.h>
 #include <netdb.h>
 
-#define MAXMSG  512
+#define MAXMSG 512
+#define MAXCMD 100
 
 int make_socket(uint16_t port);
-int read_from_client(int filedes);
+int child_server(int filedes);
 void perror_exit(char *message);
 
 int main(int argc, char *argv[])
@@ -82,7 +83,7 @@ int main(int argc, char *argv[])
 						case 0: /* Child process */
 							close(sock);
 							/* Data arriving on an already-connected socket. */
-							if (read_from_client(i) < 0) {
+							if (child_server(i) < 0) {
 								printf("Closing connection with socket %d...\n", i);
 								close(i);
 								FD_CLR(i, &active_fd_set);
@@ -131,7 +132,7 @@ int make_socket(uint16_t port)
 	return sock;
 }
 
-int read_from_client(int filedes)
+int child_server(int filedes)
 {
 	char buffer[MAXMSG];
 	int nbytes;

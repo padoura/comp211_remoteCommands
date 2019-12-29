@@ -11,36 +11,43 @@
 #define MAXMSG  512
 
 void perror_exit(char *message);
+
 void main(int argc, char *argv[])
 {
-    int port, sock, i;
+    int serverPort, clientPort, sock, i;
     char buf[MAXMSG];
-    char *line;
+    struct hostent *rem;
     struct sockaddr_in server;
     struct sockaddr *serverptr = (struct sockaddr *)&server;
-    struct hostent *rem;
-    if (argc != 3)
+    char *line;
+    if (argc != 5)
     {
-        printf("Please give host name and port number \n");
+        printf("Please give server name and port number, client port number and input file.\n");
         exit(1);
     }
+    char *serverName = strdup(argv[1]);
+    serverPort = atoi(argv[2]);        /* Convert port number to integer */
+    clientPort = atoi(argv[3]);
+    char *inputFile  = strdup(argv[4]);
+    
     /* Create socket */
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
         perror_exit("socket");
     /* Find server address */
-    if ((rem = gethostbyname(argv[1])) == NULL)
+    if ((rem = gethostbyname(serverName)) == NULL)
     {
         herror("gethostbyname");
         exit(1);
     }
-    port = atoi(argv[2]);        /* Convert port number to integer */
+    
     server.sin_family = AF_INET; /* Internet domain */
     memcpy(&server.sin_addr, rem->h_addr, rem->h_length);
-    server.sin_port = htons(port); /* Server port */
+    server.sin_port = htons(serverPort); /* Server port */
+
     /* Initiate connection */
     if (connect(sock, serverptr, sizeof(server)) < 0)
         perror_exit("connect");
-    printf("Connecting to %s port %d\n", argv[1], port);
+    printf("Connecting to %s port %d\n", serverName, serverPort);
     do
     {
         printf("Give input string: ");
@@ -58,8 +65,9 @@ void main(int argc, char *argv[])
         // }
         printf("Received string: %s", buf);
     } while (strcmp(buf,"END\n") != 0); /* Finish on"end"*/
-    close(sock);                            /* Close socket and exit */
+    close(sock);                           /* Close socket and exit */
 }
+
 void perror_exit(char *message)
 {
     perror(message);

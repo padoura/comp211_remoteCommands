@@ -8,14 +8,15 @@
 #include <stdlib.h>       /* exit */
 #include <string.h>       /* strlen */
 
-#define MAXMSG  512
+#define MAXMSG 512
+#define MAXCMD 101
 
 void perror_exit(char *message);
+void read_commands(int sock, char *inputFile);
 
 void main(int argc, char *argv[])
 {
     int serverPort, clientPort, sock, i;
-    char buf[MAXMSG];
     struct hostent *rem;
     struct sockaddr_in server;
     struct sockaddr *serverptr = (struct sockaddr *)&server;
@@ -34,8 +35,7 @@ void main(int argc, char *argv[])
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
         perror_exit("socket");
     /* Find server address */
-    if ((rem = gethostbyname(serverName)) == NULL)
-    {
+    if ((rem = gethostbyname(serverName)) == NULL){
         herror("gethostbyname");
         exit(1);
     }
@@ -48,28 +48,42 @@ void main(int argc, char *argv[])
     if (connect(sock, serverptr, sizeof(server)) < 0)
         perror_exit("connect");
     printf("Connecting to %s port %d\n", serverName, serverPort);
-    do
-    {
-        printf("Give input string: ");
-        line = fgets(buf, sizeof(buf), stdin); /* Read from stdin */
-        if (line == NULL)
-            break;
-        // for (i = 0; buf[i] != '\0'; i++)
-        // { /* For every char */
-            /* Send i-th character */
-        if (write(sock, buf, MAXMSG) < 0)
-            perror_exit("write");
-        /* receive i- th character transformed */
-        if (read(sock, buf, MAXMSG) < 0)
-            perror_exit("read");
-        // }
-        printf("Received string: %s", buf);
-    } while (strcmp(buf,"END\n") != 0); /* Finish on"end"*/
-    close(sock);                           /* Close socket and exit */
+    
+    read_commands(sock, inputFile);
 }
 
-void perror_exit(char *message)
-{
+void read_commands(int sock, char *inputFile){
+    FILE *fp;
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t size;
+    char buf[MAXMSG];
+
+    int counter = 0;
+
+    fp = fopen(inputFile, "r");
+    if (fp == NULL){
+        close(sock);
+        perror_exit("fopen");
+    }   
+    
+    while ((size = getline(&line, &len, fp)) != -1){
+        if (write(sock, line, MAXCMD) < 0)
+            perror_exit("write");
+        // if (read(sock, buf, MAXCMD) < 0)
+        //     perror_exit("read");
+        // printf("%s", buf);
+        counter++;
+        if (counter % 10 == 0){
+            counter = 0;
+            sleep(5);
+        }
+    }
+    close(sock);
+    fclose(fp);
+}
+
+void perror_exit(char *message){
     perror(message);
     exit(EXIT_FAILURE);
 }

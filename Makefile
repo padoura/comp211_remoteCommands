@@ -3,10 +3,8 @@ PREFIX ?= /Users/mpantourakis/Documents/connect-vpn-cli
 #/usr
 
 build:
-	gcc -o remoteServer remoteServer.c
-	gcc -o remoteServer2 remoteServer2.c
-	gcc -o remoteClient remoteClient.c
-	gcc -o remoteClient2 remoteClient2.c
+	gcc -w -o remoteServer remoteServer.c
+	gcc -w -o remoteClient remoteClient.c
 
 install: build
 # 	cp f5vpn-login.py $(PREFIX)/sbin/f5vpn-login.py

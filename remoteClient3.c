@@ -11,7 +11,7 @@ void perror_exit(char *message);
 void main(int argc, char *argv[])
 {
     int port, sock, i;
-    char buf[100];
+    char buf[256];
     char *line;
     struct sockaddr_in server;
     struct sockaddr *serverptr = (struct sockaddr *)&server;
@@ -44,17 +44,17 @@ void main(int argc, char *argv[])
         line = fgets(buf, sizeof(buf), stdin); /* Read from stdin */
         if (line == NULL)
             break;
-        // for (i = 0; buf[i] != '\0'; i++)
-        // { /* For every char */
+        for (i = 0; buf[i] != '\0'; i++)
+        { /* For every char */
             /* Send i-th character */
-        if (write(sock, buf, 100) < 0)
-            perror_exit("write");
-        /* receive i- th character transformed */
-        if (read(sock, buf, 100) < 0)
-            perror_exit("read");
-        // }
+            if (write(sock, buf + i, 1) < 0)
+                perror_exit("write");
+            /* receive i- th character transformed */
+            if (read(sock, buf + i, 1) < 0)
+                perror_exit("read");
+        }
         printf("Received string: %s", buf);
-    } while (strcmp(buf,"end\n") != 0); /* Finish on"end"*/
+    } while (strcmp(buf,"END\n") != 0); /* Finish on"end"*/
     close(sock);                            /* Close socket and exit */
 }
 void perror_exit(char *message)

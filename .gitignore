@@ -52,3 +52,7 @@ Mkfile.old
 dkms.conf
 
 *.vscode
+*.DS_Store
+/COMP211slides_11.pdf
+/COMP211slides_12.pdf
+/COMP211slides_13.pdf

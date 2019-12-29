@@ -16,23 +16,18 @@ void sigchld_handler(int sig);
 
 void main(int argc, char *argv[])
 {
-    int port, sock, newsock, childrenTotal;
+    int port, sock, newsock;
     struct sockaddr_in server, client;
     socklen_t clientlen;
     struct sockaddr *serverptr = (struct sockaddr *)&server;
     struct sockaddr *clientptr = (struct sockaddr *)&client;
     struct hostent *rem;
-    if (argc != 3)
+    if (argc != 2)
     {
-        printf("Please give port number and number of children processes\n");
+        printf("Please give port number \n");
         exit(1);
     }
     port = atoi(argv[1]);
-    childrenTotal = atoi(argv[2]);
-
-    /* Ignore SIGPIPEs */
-    signal(SIGPIPE, SIG_IGN);
-
     /* Reap dead children a s y n c h r o n o u s l y */
     signal(SIGCHLD, sigchld_handler);
     /* Create socket */
@@ -41,19 +36,6 @@ void main(int argc, char *argv[])
     server.sin_family = AF_INET; /* Internet domain */
     server.sin_addr.s_addr = htonl(INADDR_ANY);
     server.sin_port = htons(port); /* The given port */
-
-    // Allow reuse of socket before bind when server quits
-    int option = 1;
-    int optLen = sizeof(option);
-    if(
-        setsockopt(sock,SOL_SOCKET,SO_REUSEPORT,&option,optLen) < 0 ||
-        setsockopt(sock,SOL_SOCKET,SO_REUSEADDR,&option,optLen) < 0
-    )
-    {
-        close(sock);
-        perror_exit("setsockopt");
-    }
-
     /* Bind socket to address */
     if (bind(sock, serverptr, sizeof(server)) < 0)
         perror_exit("bind");
@@ -90,26 +72,15 @@ void main(int argc, char *argv[])
 
 void child_server(int newsock)
 {
-    FILE *pipe_fp;             /* use popen to run command */
-    char commands[100];
-    char result[1000];
-    int c;
-    while (read(newsock, commands, 100) > 0) //implementation defined behaviour for 
+    char buf[1];
+    while (read(newsock, buf, 1) > 0)
     {                    /* Receive 1 char */
-        // putchar(buf[0]); /* Print received char */
+        putchar(buf[0]); /* Print received char */
         /* Capitalize character */
-        printf("client sent command %s", commands);
-        /* Invoke command through popen */
-        commands[100]='\n';
-        if ((pipe_fp = popen(commands,"r")) == NULL)
-            perror_exit("popen");
-        /* transfer data from command to buf */
-        while ((c = getc(pipe_fp)) != EOF)
-            strncat(result, &c, 1);
+        buf[0] = toupper(buf[0]);
         /* Reply */
-        if (write(newsock, result, 100) < 0)
+        if (write(newsock, buf, 1) < 0)
             perror_exit("write");
-        pclose(pipe_fp);
     }
     printf("Closing connection.\n");
     close(newsock); /* Close socket */

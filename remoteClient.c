@@ -12,7 +12,8 @@
 #define MAXCMD 101
 
 void perror_exit(char *message);
-void read_commands(int sock, char *inputFile);
+void send_commands(int sock, char *inputFile);
+void write_line(int sock, char *line, size_t len);
 
 void main(int argc, char *argv[])
 {
@@ -49,10 +50,10 @@ void main(int argc, char *argv[])
         perror_exit("connect");
     printf("Connecting to %s port %d\n", serverName, serverPort);
     
-    read_commands(sock, inputFile);
+    send_commands(sock, inputFile);
 }
 
-void read_commands(int sock, char *inputFile){
+void send_commands(int sock, char *inputFile){
     FILE *fp;
     char *line = NULL;
     size_t len = 0;
@@ -68,8 +69,8 @@ void read_commands(int sock, char *inputFile){
     }   
     
     while ((size = getline(&line, &len, fp)) != -1){
-        if (write(sock, line, MAXCMD) < 0)
-            perror_exit("write");
+        write_line(sock, line, len);
+            
         // if (read(sock, buf, MAXCMD) < 0)
         //     perror_exit("read");
         // printf("%s", buf);
@@ -82,6 +83,17 @@ void read_commands(int sock, char *inputFile){
     close(sock);
     fclose(fp);
 }
+
+void write_line(int sock, char *line, size_t len){
+    printf("Sending command: %s\n",line);
+    for (int i = 0; i < len && line[i] != '\0'; i++){ 
+        /* For every char */
+        /* Send i-th character */
+        if (write(sock, line + i, 1) < 0)
+            perror_exit("write");
+    }
+}
+
 
 void perror_exit(char *message){
     perror(message);

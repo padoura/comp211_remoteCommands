@@ -12,11 +12,14 @@
 #include <netdb.h>
 
 #define MAXMSG 512
-#define MAXCMD 100
+#define MAXCMD 101
 
 int make_socket(uint16_t port);
 int child_server(int filedes);
 void perror_exit(char *message);
+pid_t *create_children(int childrenTotal);
+void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid);
+char *read_from_client(int filedes);
 
 int main(int argc, char *argv[])
 {
@@ -24,9 +27,7 @@ int main(int argc, char *argv[])
 	int sock, childrenTotal;
     uint16_t port;
 	fd_set active_fd_set, read_fd_set;
-	int i;
-	struct sockaddr_in clientname;
-	size_t size;
+	pid_t ppid = getpid();
 
     if (argc != 3)
     {
@@ -48,16 +49,30 @@ int main(int argc, char *argv[])
 	FD_ZERO(&active_fd_set);
 	FD_SET(sock, &active_fd_set);
 
+	pid_t *pid = create_children(childrenTotal);
+
+	if (getpid() == ppid){
+		parent_server(childrenTotal, active_fd_set, sock, pid);
+	}
+	else{
+		child_server(0);
+	}
+}
+
+void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid){
+	fd_set read_fd_set;
+	int i;
+	struct sockaddr_in clientname;
+	size_t size;
+
 	while (1) {
-		childrenTotal = childrenTotal + 3; //taking 3 standard file descriptors into account
 		/* Block until input arrives on one or more active sockets. */
 		read_fd_set = active_fd_set;
-		if (select(childrenTotal, &read_fd_set, NULL, NULL, NULL) < 0) {
+		if (select(FD_SETSIZE, &read_fd_set, NULL, NULL, NULL) < 0) {
             perror_exit("select");
 		}
-
 		/* Service all the sockets with input pending. */
-		for (i = 0; i < childrenTotal; ++i)
+		for (i = 0; i < FD_SETSIZE; ++i)
 			if (FD_ISSET(i, &read_fd_set)) {
 				printf("adding fd: %d\n", i);
 				if (i == sock) {
@@ -68,30 +83,28 @@ int main(int argc, char *argv[])
 					if (new < 0) {
                         perror_exit("accept");
 					}
-					printf("DEBUG: creating new from socket %d\n",sock);
-					// printf
-					//     ("Server: connect from host , port %d.\n",
-					//      //inet_ntoa (clientname.sin_addr),
-					//      ntohs(clientname.sin_port));
+					printf("Server: connect from host port %d.\n",
+						//inet_ntoa (clientname.sin_addr),
+						ntohs(clientname.sin_port));
 					FD_SET(new, &active_fd_set);
 				} else {
-					printf("DEBUG: checking socket %d\n",i);
-					switch (fork()) {        /* Create child for serving client */
-						case -1: /* Error */
-							perror("fork");
-							break;
-						case 0: /* Child process */
-							close(sock);
-							/* Data arriving on an already-connected socket. */
-							if (child_server(i) < 0) {
-								printf("Closing connection with socket %d...\n", i);
-								close(i);
-								FD_CLR(i, &active_fd_set);
-							}
-							exit(0);
-					}
-					close(i); /* parent closes socket to client */
+					char *commands = read_from_client(i);
+					//allocate_to_children(commands);
+					printf("Closing connection with socket %d...\n", i);
+					close(i);
 					FD_CLR(i, &active_fd_set);
+
+					// 		close(sock);
+					// 		/* Data arriving on an already-connected socket. */
+					// 		if (child_server(i) < 0) {
+					// 			printf("Closing connection with socket %d...\n", i);
+					// 			close(i);
+					// 			FD_CLR(i, &active_fd_set);
+					// 		}
+					// 		exit(0);
+					// }
+					// close(i); /* parent closes socket to client */
+					// FD_CLR(i, &active_fd_set);
 				}
 			}
 	}
@@ -134,32 +147,41 @@ int make_socket(uint16_t port)
 
 int child_server(int filedes)
 {
-	char buffer[MAXMSG];
-	int nbytes;
-
-	while(1){
-		nbytes = read(filedes, buffer, MAXMSG);
-		if (nbytes < 0) {
-			/* Read error. */
-			perror_exit("read");
-		} else if (nbytes == 0)
-			/* End-of-file. */
-			return -1;
-		else {
-			printf("Socket %d sent message: %s", filedes, buffer);
-			/* Data read. */
-			/* Capitalize character */
-			for (int j=0; j<MAXMSG ;j++){
-				buffer[j] = toupper(buffer[j]);
-			}
-			if (write(filedes, buffer, MAXMSG) < 0)
-				perror_exit("write");
-		}
-	}
+	//TODO
+	exit(EXIT_SUCCESS);
 }
 
-void perror_exit(char *message)
-{
+pid_t *create_children(int childrenTotal){
+	pid_t pid[childrenTotal];
+    for(int j=0;j<childrenTotal;j++) {
+		pid[j] = fork();
+        if(pid[j] == 0) { 
+            printf("[child] pid %d from [parent] pid %d\n",getpid(),getppid());
+            break;
+        }
+    }
+	return pid;
+}
+
+char *read_from_client(int filedes){
+	char buf[1];
+	char *commands;
+	size_t len = 0;
+	size_t initSize = 100;
+
+	commands = realloc(NULL, sizeof(char)*initSize);
+	printf("Socket %d sent commands: ", filedes);
+    while (read(filedes, buf, 1) > 0){/* Receive 1 char */
+		commands[len++]=buf[0];
+        if(len==initSize){
+            commands = realloc(commands, sizeof(char)*(initSize+=16));
+        }
+    }
+	commands[len++]='\0';
+	return commands;
+}
+
+void perror_exit(char *message){
     perror(message);
     exit(EXIT_FAILURE);
 }

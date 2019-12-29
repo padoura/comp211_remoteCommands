@@ -55,7 +55,7 @@ void main(int argc, char *argv[])
         }
         printf("Received string: %s", buf);
     } while (strcmp(buf,"END\n") != 0); /* Finish on"end"*/
-    close(sock);                            /* Close socket and exit */
+    close(sock);                           /* Close socket and exit */
 }
 void perror_exit(char *message)
 {

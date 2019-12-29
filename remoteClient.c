@@ -7,11 +7,14 @@
 #include <netdb.h>        /* ge th os tb ya dd r */
 #include <stdlib.h>       /* exit */
 #include <string.h>       /* strlen */
+
+#define MAXMSG  512
+
 void perror_exit(char *message);
 void main(int argc, char *argv[])
 {
     int port, sock, i;
-    char buf[100];
+    char buf[MAXMSG];
     char *line;
     struct sockaddr_in server;
     struct sockaddr *serverptr = (struct sockaddr *)&server;
@@ -47,14 +50,14 @@ void main(int argc, char *argv[])
         // for (i = 0; buf[i] != '\0'; i++)
         // { /* For every char */
             /* Send i-th character */
-        if (write(sock, buf, 100) < 0)
+        if (write(sock, buf, MAXMSG) < 0)
             perror_exit("write");
         /* receive i- th character transformed */
-        if (read(sock, buf, 100) < 0)
+        if (read(sock, buf, MAXMSG) < 0)
             perror_exit("read");
         // }
         printf("Received string: %s", buf);
-    } while (strcmp(buf,"end\n") != 0); /* Finish on"end"*/
+    } while (strcmp(buf,"END\n") != 0); /* Finish on"end"*/
     close(sock);                            /* Close socket and exit */
 }
 void perror_exit(char *message)

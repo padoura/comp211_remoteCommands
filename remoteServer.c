@@ -1,27 +1,32 @@
-/* i n e t _ s t r _ s e r v e r .c: Internet stream sockets server */
+/*
+ * Tcp server with select() example:
+ * http://www.gnu.org/software/libc/manual/html_node/Server-Example.html
+ */
 #include <stdio.h>
-#include <sys/wait.h>   /* sockets */
-#include <sys/types.h>  /* sockets */
-#include <sys/socket.h> /* sockets */
-#include <netinet/in.h> /* internet sockets */
-#include <netdb.h>      /* ge th os tb ya dd r */
-#include <unistd.h>     /* fork */
-#include <stdlib.h>     /* exit */
-#include <ctype.h>      /* toupper */
-#include <signal.h>     /* signal */
+#include <errno.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
 
-void child_server(int newsock);
+#define MAXMSG  512
+
+int make_socket(uint16_t port);
+int read_from_client(int filedes);
 void perror_exit(char *message);
-void sigchld_handler(int sig);
 
-void main(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
-    int port, sock, newsock, childrenTotal;
-    struct sockaddr_in server, client;
-    socklen_t clientlen;
-    struct sockaddr *serverptr = (struct sockaddr *)&server;
-    struct sockaddr *clientptr = (struct sockaddr *)&client;
-    struct hostent *rem;
+	extern int make_socket(uint16_t port);
+	int sock, childrenTotal;
+    uint16_t port;
+	fd_set active_fd_set, read_fd_set;
+	int i;
+	struct sockaddr_in clientname;
+	size_t size;
+
     if (argc != 3)
     {
         printf("Please give port number and number of children processes\n");
@@ -30,19 +35,84 @@ void main(int argc, char *argv[])
     port = atoi(argv[1]);
     childrenTotal = atoi(argv[2]);
 
-    /* Ignore SIGPIPEs */
-    signal(SIGPIPE, SIG_IGN);
+	/* Create the TCP socket and set it up to accept connections. */
+	sock = make_socket(port);
+	/* Listen for connections */
+	if (listen(sock, 1) < 0) {
+        perror_exit("listen");
+	}
+	printf("Listening for connections to port %d with total children processes: %d\n", port, childrenTotal);
 
-    /* Reap dead children a s y n c h r o n o u s l y */
-    signal(SIGCHLD, sigchld_handler);
-    /* Create socket */
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+	/* Initialize the set of active sockets. */
+	FD_ZERO(&active_fd_set);
+	FD_SET(sock, &active_fd_set);
+
+	while (1) {
+		childrenTotal = childrenTotal + 3; //taking 3 standard file descriptors into account
+		/* Block until input arrives on one or more active sockets. */
+		read_fd_set = active_fd_set;
+		if (select(childrenTotal, &read_fd_set, NULL, NULL, NULL) < 0) {
+            perror_exit("select");
+		}
+
+		/* Service all the sockets with input pending. */
+		for (i = 0; i < childrenTotal; ++i)
+			if (FD_ISSET(i, &read_fd_set)) {
+				printf("adding fd: %d\n", i);
+				if (i == sock) {
+					/* Connection request on original socket. */
+					int new;
+					size = sizeof(clientname);
+					new = accept(sock,(struct sockaddr *)&clientname, &size);
+					if (new < 0) {
+                        perror_exit("accept");
+					}
+					printf("DEBUG: creating new from socket %d\n",sock);
+					// printf
+					//     ("Server: connect from host , port %d.\n",
+					//      //inet_ntoa (clientname.sin_addr),
+					//      ntohs(clientname.sin_port));
+					FD_SET(new, &active_fd_set);
+				} else {
+					printf("DEBUG: checking socket %d\n",i);
+					switch (fork()) {        /* Create child for serving client */
+						case -1: /* Error */
+							perror("fork");
+							break;
+						case 0: /* Child process */
+							close(sock);
+							/* Data arriving on an already-connected socket. */
+							if (read_from_client(i) < 0) {
+								printf("Closing connection with socket %d...\n", i);
+								close(i);
+								FD_CLR(i, &active_fd_set);
+							}
+							exit(0);
+					}
+					close(i); /* parent closes socket to client */
+					FD_CLR(i, &active_fd_set);
+				}
+			}
+	}
+}
+
+int make_socket(uint16_t port)
+{
+	int sock;
+	struct sockaddr_in name;
+
+	/* Create the socket. */
+	sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (sock < 0) {
         perror_exit("socket");
-    server.sin_family = AF_INET; /* Internet domain */
-    server.sin_addr.s_addr = htonl(INADDR_ANY);
-    server.sin_port = htons(port); /* The given port */
+	}
 
-    // Allow reuse of socket before bind when server quits
+	/* Give the socket a name. */
+	name.sin_family = AF_INET;
+	name.sin_port = htons(port);
+	name.sin_addr.s_addr = htonl(INADDR_ANY);
+
+	// Allow reuse of socket before bind when server quits
     int option = 1;
     int optLen = sizeof(option);
     if(
@@ -54,72 +124,37 @@ void main(int argc, char *argv[])
         perror_exit("setsockopt");
     }
 
-    /* Bind socket to address */
-    if (bind(sock, serverptr, sizeof(server)) < 0)
+	if (bind(sock, (struct sockaddr *) &name, sizeof(name)) < 0) {
         perror_exit("bind");
-    /* Listen for connections */
-    if (listen(sock, 5) < 0)
-        perror_exit("listen");
-    printf("Listening for connections to port %d\n", port);
-    while (1)
-    {
-        /* accept connection */
-        if ((newsock = accept(sock, clientptr, &clientlen)) < 0)
-            perror_exit("accept");
-        /* Find client ’s address */
-        // if ((rem = gethostbyaddr((char *)&client.sin_addr.s_addr, sizeof(client.sin_addr.s_addr), client.sin_family)) == NULL)
-        // {
-            // herror("gethostbyaddr");
-            // exit(1);
-        // }
-        // printf("Accepted connection from %s\n", rem->h_addr);
-        // printf ("Accepted connection \n");
-        switch (fork())
-        {        /* Create child for serving client */
-        case -1: /* Error */
-            perror("fork");
-            break;
-        case 0: /* Child process */
-            close(sock);
-            child_server(newsock);
-            exit(0);
-        }
-        close(newsock); /* parent closes socket to client */
-    }
+	}
+
+	return sock;
 }
 
-void child_server(int newsock)
+int read_from_client(int filedes)
 {
-    FILE *pipe_fp;             /* use popen to run command */
-    char commands[100];
-    char result[1000];
-    int c;
-    while (read(newsock, commands, 100) > 0) //implementation defined behaviour for 
-    {                    /* Receive 1 char */
-        // putchar(buf[0]); /* Print received char */
-        /* Capitalize character */
-        printf("client sent command %s", commands);
-        /* Invoke command through popen */
-        commands[100]='\n';
-        if ((pipe_fp = popen(commands,"r")) == NULL)
-            perror_exit("popen");
-        /* transfer data from command to buf */
-        while ((c = getc(pipe_fp)) != EOF)
-            strncat(result, &c, 1);
-        /* Reply */
-        if (write(newsock, result, 100) < 0)
-            perror_exit("write");
-        pclose(pipe_fp);
-    }
-    printf("Closing connection.\n");
-    close(newsock); /* Close socket */
-}
+	char buffer[MAXMSG];
+	int nbytes;
 
-/* Wait for all dead child processes */
-void sigchld_handler(int sig)
-{
-    while (waitpid(-1, NULL, WNOHANG) > 0)
-        ;
+	while(1){
+		nbytes = read(filedes, buffer, MAXMSG);
+		if (nbytes < 0) {
+			/* Read error. */
+			perror_exit("read");
+		} else if (nbytes == 0)
+			/* End-of-file. */
+			return -1;
+		else {
+			printf("Socket %d sent message: %s", filedes, buffer);
+			/* Data read. */
+			/* Capitalize character */
+			for (int j=0; j<MAXMSG ;j++){
+				buffer[j] = toupper(buffer[j]);
+			}
+			if (write(filedes, buffer, MAXMSG) < 0)
+				perror_exit("write");
+		}
+	}
 }
 
 void perror_exit(char *message)

@@ -7,7 +7,7 @@ build:
 	gcc -w -o remoteClient remoteClient.c
 
 install: build
-# 	cp f5vpn-login.py $(PREFIX)/sbin/f5vpn-login.py
+	./remoteServer 9002 10
 # 	chmod +x $(PREFIX)/sbin/f5vpn-login.py
 # 	cp f5vpn-login-runner $(PREFIX)/bin/f5vpn-login
 # 	chmod u+s $(PREFIX)/bin/f5vpn-login

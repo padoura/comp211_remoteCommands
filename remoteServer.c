@@ -19,7 +19,8 @@ int child_server(int filedes);
 void perror_exit(char *message);
 pid_t *create_children(int childrenTotal);
 void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid);
-char *read_from_client(int filedes);
+char **read_from_client(int fileDes);
+char *newline_splitter(char * commands, size_t len, size_t numCommands);
 
 int main(int argc, char *argv[])
 {
@@ -88,9 +89,9 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 						ntohs(clientname.sin_port));
 					FD_SET(new, &active_fd_set);
 				} else {
-					char *commands = read_from_client(i);
+					char **commands = read_from_client(i);
 					//allocate_to_children(commands);
-					printf("Closing connection with socket %d...\n", i);
+					printf("Closing TCP connection with socket %d...\n", i);
 					close(i);
 					FD_CLR(i, &active_fd_set);
 
@@ -163,22 +164,42 @@ pid_t *create_children(int childrenTotal){
 	return pid;
 }
 
-char *read_from_client(int filedes){
+char **read_from_client(int fileDes){
 	char buf[1];
 	char *commands;
 	size_t len = 0;
 	size_t initSize = 100;
+	size_t numCommands = 0;
 
 	commands = realloc(NULL, sizeof(char)*initSize);
-	printf("Socket %d sent commands: ", filedes);
-    while (read(filedes, buf, 1) > 0){/* Receive 1 char */
+	printf("Socket %d sent commands: ", fileDes);
+    while (read(fileDes, buf, 1) > 0){/* Receive 1 char */
 		commands[len++]=buf[0];
         if(len==initSize){
             commands = realloc(commands, sizeof(char)*(initSize+=16));
         }
+		if (buf[0] == '\n'){
+			numCommands++;
+		}
     }
-	commands[len++]='\0';
-	return commands;
+	commands[len]='\0';
+	if (commands[len-1] != '\n'){
+		numCommands++;
+	}
+	char **splitted = newline_splitter(commands, len, numCommands);
+	free(commands);
+	return splitted;
+}
+
+char *newline_splitter(char * commands, size_t len, size_t numCommands){
+	char *splitted[numCommands];
+	char *p = strtok(commands, "\n");
+	for (int i=0; i<numCommands; i++){
+		printf("%s\n", p);
+		splitted[i]=p;
+		p = strtok(NULL, "\n");
+	}
+	return splitted;
 }
 
 void perror_exit(char *message){

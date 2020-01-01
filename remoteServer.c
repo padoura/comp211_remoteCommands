@@ -3,6 +3,7 @@
  * http://www.gnu.org/software/libc/manual/html_node/Server-Example.html
  */
 #include <stdio.h>
+#include <string.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -20,7 +21,7 @@ void perror_exit(char *message);
 pid_t *create_children(int childrenTotal);
 void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid);
 char **read_from_client(int fileDes);
-char *newline_splitter(char * commands, size_t len, size_t numCommands);
+char **newline_splitter(char * commands, size_t len, size_t numCommands);
 
 int main(int argc, char *argv[])
 {
@@ -172,7 +173,7 @@ char **read_from_client(int fileDes){
 	size_t numCommands = 0;
 
 	commands = realloc(NULL, sizeof(char)*initSize);
-	printf("Socket %d sent commands: ", fileDes);
+	printf("Socket %d sent commands:\n", fileDes);
     while (read(fileDes, buf, 1) > 0){/* Receive 1 char */
 		commands[len++]=buf[0];
         if(len==initSize){
@@ -187,17 +188,17 @@ char **read_from_client(int fileDes){
 		numCommands++;
 	}
 	char **splitted = newline_splitter(commands, len, numCommands);
-	free(commands);
+	// free(commands);
 	return splitted;
 }
 
-char *newline_splitter(char * commands, size_t len, size_t numCommands){
-	char *splitted[numCommands];
-	char *p = strtok(commands, "\n");
+char **newline_splitter(char * commands, size_t len, size_t numCommands){
+	char **splitted = malloc(sizeof(int)*numCommands);
+	char *p = strsep(&commands, "\n");
 	for (int i=0; i<numCommands; i++){
 		printf("%s\n", p);
-		splitted[i]=p;
-		p = strtok(NULL, "\n");
+		*(splitted+i)=p;
+		p = strsep(&commands, "\n");
 	}
 	return splitted;
 }

@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include <arpa/inet.h>
 
 #define MAXMSG 512
 #define MAXCMD 100
@@ -27,7 +28,7 @@ pid_t *create_children(int childrenTotal);
 void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid, int *fd);
 struct InputCommands *read_from_client(int fileDes);
 char **newline_splitter(char * commands, size_t len, size_t numCommands);
-void allocate_to_children(struct InputCommands *Commands, int *fd);
+void allocate_to_children(struct InputCommands *Commands, int *fd, struct sockaddr_in clientname);
 
 int main(int argc, char *argv[])
 {
@@ -102,8 +103,8 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 					if (new < 0) {
                         perror_exit("accept");
 					}
-					printf("Server: connect from host port %d.\n",
-						//inet_ntoa (clientname.sin_addr),
+					printf("Server: connect from host %s port %d.\n",
+						inet_ntoa(clientname.sin_addr),
 						ntohs(clientname.sin_port));
 					FD_SET(new, &active_fd_set);
 				} else {
@@ -116,7 +117,7 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 					close(i);
 					FD_CLR(i, &active_fd_set);
 
-					allocate_to_children(Commands, fd);
+					allocate_to_children(Commands, fd, clientname);
 				}
 			}
 	}
@@ -127,26 +128,28 @@ int child_server(int *fd)
 	close(fd[1]);
 
 	while(1){
-		char cmd[MAXCMD];
-		read(fd[0], cmd, MAXCMD+1);
-		command_to_run(cmd);
+		int maxWrapperSize = MAXCMD+5+21+2;
+		char *cmd = malloc(maxWrapperSize*sizeof(char));
+		// char cmdCopy[maxWrapperSize];
+		read(fd[0], cmd, maxWrapperSize+1);
+		char *port = strsep(&cmd, ";");
+		char *ip = strsep(&cmd, ";");
+		// command_to_run(cmd);
 		if (strlen(cmd) > MAXCMD){
-
+			
 		}
 		printf("Child %d read '%s' with length %d\n", getpid(), cmd, strlen(cmd));
 	}
 }
 
-void allocate_to_children(struct InputCommands *Commands, int *fd){
-
+void allocate_to_children(struct InputCommands *Commands, int *fd, struct sockaddr_in clientname){
+	int maxWrapperSize = MAXCMD+5+21+2;
 	for(int i=0;i<Commands->numCommands;i++){
-		char *cmdbuf = *(Commands->commands+i);
-		// printf("Writing '%s'\n", cmdbuf);
-		// if (strlen(cmdbuf) <= MAXCMD){
-			if (write(fd[1], cmdbuf, MAXCMD+1) == -1){
-				perror_exit("write of allocate_to_children");
-			}
-		// }
+		char cmdbuf[maxWrapperSize];
+		snprintf(cmdbuf, maxWrapperSize, "%d;%s;%s", ntohs(clientname.sin_port), inet_ntoa(clientname.sin_addr), *(Commands->commands+i));
+		if (write(fd[1], cmdbuf, maxWrapperSize+1) == -1){
+			perror_exit("write of allocate_to_children");
+		}
 	}
 }
 
@@ -232,7 +235,8 @@ char **newline_splitter(char * commands, size_t len, size_t numCommands){
 	char *p = strsep(&commands, "\n");
 	for (int i=0; i<numCommands; i++){
 		*(splitted+i)=p;
-		// printf("%s\n", *(splitted+i));
+		// printf("Splitted: %s\n", *(splitted+i));
+		// printf("Rest: %s\n", commands);
 		p = strsep(&commands, "\n");
 	}
 	return splitted;

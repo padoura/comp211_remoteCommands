@@ -19,6 +19,7 @@
 struct InputCommands {
    char  **commands;
    size_t numCommands;
+   uint16_t clientport;
 };
 
 int make_socket(uint16_t port);
@@ -27,7 +28,7 @@ void perror_exit(char *message);
 pid_t *create_children(int childrenTotal);
 void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid, int *fd);
 struct InputCommands *read_from_client(int fileDes);
-char **newline_splitter(char * commands, size_t len, size_t numCommands);
+struct InputCommands *newline_splitter(char * commands, size_t len, size_t numCommands);
 void allocate_to_children(struct InputCommands *Commands, int *fd, struct sockaddr_in clientname);
 
 int main(int argc, char *argv[])
@@ -147,7 +148,7 @@ int child_server(int *fd)
 			while(fgets(result, MAXMSG, pipe_fp) != NULL) {
 				printf("%s", result);
 			}
-			printf("'\n");
+			printf("' and will be sent to address '%s' and port '%s' \n", ip, port);
 			pclose(pipe_fp);
 		}
 		
@@ -160,7 +161,7 @@ void allocate_to_children(struct InputCommands *Commands, int *fd, struct sockad
 	int maxWrapperSize = MAXCMD+5+21+2;
 	for(int i=0;i<Commands->numCommands;i++){
 		char cmdbuf[maxWrapperSize];
-		snprintf(cmdbuf, maxWrapperSize, "%d;%s;%s", ntohs(clientname.sin_port), inet_ntoa(clientname.sin_addr), *(Commands->commands+i));
+		snprintf(cmdbuf, maxWrapperSize, "%d;%s;%s", Commands->clientport, inet_ntoa(clientname.sin_addr), *(Commands->commands+i));
 		if (write(fd[1], cmdbuf, maxWrapperSize+1) == -1){
 			perror_exit("write of allocate_to_children");
 		}
@@ -236,24 +237,27 @@ struct InputCommands *read_from_client(int fileDes){
 	if (commands[len-1] != '\n'){
 		numCommands++;
 	}
-	char **splitted = newline_splitter(commands, len, numCommands);
-	struct InputCommands *Commands = malloc(sizeof(struct InputCommands));
-	Commands->commands = splitted;
-	Commands->numCommands = numCommands;
+	struct InputCommands *Commands = newline_splitter(commands, len, numCommands);
+	// Commands->clientport = atoi(strsep());
+	// Commands->commands = splitted;
+	// Commands->numCommands = numCommands;
 	// free(commands);
 	return Commands;
 }
 
-char **newline_splitter(char * commands, size_t len, size_t numCommands){
-	char **splitted = malloc(sizeof(char*)*numCommands);
+struct InputCommands *newline_splitter(char * commands, size_t len, size_t numCommands){
+	struct InputCommands *Commands = malloc(sizeof(struct InputCommands));
+	Commands->commands = malloc(sizeof(char*)*numCommands);
+	Commands->clientport = atoi(strsep(&commands, "\n"));
 	char *p = strsep(&commands, "\n");
 	for (int i=0; i<numCommands; i++){
-		*(splitted+i)=p;
+		*(Commands->commands+i)=p;
 		// printf("Splitted: %s\n", *(splitted+i));
 		// printf("Rest: %s\n", commands);
 		p = strsep(&commands, "\n");
 	}
-	return splitted;
+	Commands->numCommands = numCommands;
+	return Commands;
 }
 
 void perror_exit(char *message){

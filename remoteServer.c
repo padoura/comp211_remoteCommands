@@ -13,15 +13,21 @@
 #include <netdb.h>
 
 #define MAXMSG 512
-#define MAXCMD 101
+#define MAXCMD 100
+
+struct InputCommands {
+   char  **commands;
+   size_t numCommands;
+};
 
 int make_socket(uint16_t port);
-int child_server(int filedes);
+int child_server(int *fd);
 void perror_exit(char *message);
 pid_t *create_children(int childrenTotal);
-void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid);
-char **read_from_client(int fileDes);
+void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid, int *fd);
+struct InputCommands *read_from_client(int fileDes);
 char **newline_splitter(char * commands, size_t len, size_t numCommands);
+void allocate_to_children(struct InputCommands *Commands, int *fd);
 
 int main(int argc, char *argv[])
 {
@@ -31,13 +37,24 @@ int main(int argc, char *argv[])
 	fd_set active_fd_set, read_fd_set;
 	pid_t ppid = getpid();
 
-    if (argc != 3)
-    {
+    if (argc != 3){
         printf("Please give port number and number of children processes\n");
         exit(1);
     }
     port = atoi(argv[1]);
     childrenTotal = atoi(argv[2]);
+
+	/* Ignore SIGPIPEs */
+    signal(SIGPIPE, SIG_IGN);
+
+	// initialize pipes
+	int fd[2];
+	// int fd[childrenTotal][2]; 
+	// for (int i=0;i<childrenTotal;i++){
+	if (pipe(fd)==-1){ 
+		perror_exit("pipe"); 
+	}
+	// }
 
 	/* Create the TCP socket and set it up to accept connections. */
 	sock = make_socket(port);
@@ -54,19 +71,19 @@ int main(int argc, char *argv[])
 	pid_t *pid = create_children(childrenTotal);
 
 	if (getpid() == ppid){
-		parent_server(childrenTotal, active_fd_set, sock, pid);
+		parent_server(childrenTotal, active_fd_set, sock, pid, fd);
 	}
 	else{
-		child_server(0);
+		child_server(fd);
 	}
 }
 
-void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid){
+void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid, int *fd){
 	fd_set read_fd_set;
 	int i;
 	struct sockaddr_in clientname;
 	size_t size;
-
+	close(fd[0]); // close reading end
 	while (1) {
 		/* Block until input arrives on one or more active sockets. */
 		read_fd_set = active_fd_set;
@@ -90,25 +107,46 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 						ntohs(clientname.sin_port));
 					FD_SET(new, &active_fd_set);
 				} else {
-					char **commands = read_from_client(i);
+					struct InputCommands *Commands = read_from_client(i);
+					// for (int i=0; i<Commands->numCommands; i++){
+					// 	printf("%s\n", *(Commands->commands+i));
+					// }
 					//allocate_to_children(commands);
 					printf("Closing TCP connection with socket %d...\n", i);
 					close(i);
 					FD_CLR(i, &active_fd_set);
 
-					// 		close(sock);
-					// 		/* Data arriving on an already-connected socket. */
-					// 		if (child_server(i) < 0) {
-					// 			printf("Closing connection with socket %d...\n", i);
-					// 			close(i);
-					// 			FD_CLR(i, &active_fd_set);
-					// 		}
-					// 		exit(0);
-					// }
-					// close(i); /* parent closes socket to client */
-					// FD_CLR(i, &active_fd_set);
+					allocate_to_children(Commands, fd);
 				}
 			}
+	}
+}
+
+int child_server(int *fd)
+{
+	close(fd[1]);
+
+	while(1){
+		char cmd[MAXCMD];
+		read(fd[0], cmd, MAXCMD+1);
+		command_to_run(cmd);
+		if (strlen(cmd) > MAXCMD){
+
+		}
+		printf("Child %d read '%s' with length %d\n", getpid(), cmd, strlen(cmd));
+	}
+}
+
+void allocate_to_children(struct InputCommands *Commands, int *fd){
+
+	for(int i=0;i<Commands->numCommands;i++){
+		char *cmdbuf = *(Commands->commands+i);
+		// printf("Writing '%s'\n", cmdbuf);
+		// if (strlen(cmdbuf) <= MAXCMD){
+			if (write(fd[1], cmdbuf, MAXCMD+1) == -1){
+				perror_exit("write of allocate_to_children");
+			}
+		// }
 	}
 }
 
@@ -147,12 +185,6 @@ int make_socket(uint16_t port)
 	return sock;
 }
 
-int child_server(int filedes)
-{
-	//TODO
-	exit(EXIT_SUCCESS);
-}
-
 pid_t *create_children(int childrenTotal){
 	pid_t pid[childrenTotal];
     for(int j=0;j<childrenTotal;j++) {
@@ -165,7 +197,7 @@ pid_t *create_children(int childrenTotal){
 	return pid;
 }
 
-char **read_from_client(int fileDes){
+struct InputCommands *read_from_client(int fileDes){
 	char buf[1];
 	char *commands;
 	size_t len = 0;
@@ -188,16 +220,19 @@ char **read_from_client(int fileDes){
 		numCommands++;
 	}
 	char **splitted = newline_splitter(commands, len, numCommands);
+	struct InputCommands *Commands = malloc(sizeof(struct InputCommands));
+	Commands->commands = splitted;
+	Commands->numCommands = numCommands;
 	// free(commands);
-	return splitted;
+	return Commands;
 }
 
 char **newline_splitter(char * commands, size_t len, size_t numCommands){
-	char **splitted = malloc(sizeof(int)*numCommands);
+	char **splitted = malloc(sizeof(char*)*numCommands);
 	char *p = strsep(&commands, "\n");
 	for (int i=0; i<numCommands; i++){
-		printf("%s\n", p);
 		*(splitted+i)=p;
+		// printf("%s\n", *(splitted+i));
 		p = strsep(&commands, "\n");
 	}
 	return splitted;

@@ -12,7 +12,7 @@
 #define MAXCMD 101
 
 void perror_exit(char *message);
-void send_commands(int sock, char *inputFile);
+void send_commands(int sock, char *inputFile, int clientPort);
 void write_line(int sock, char *line, size_t len);
 
 void main(int argc, char *argv[])
@@ -50,10 +50,10 @@ void main(int argc, char *argv[])
         perror_exit("connect");
     printf("Connecting to %s port %d\n", serverName, serverPort);
     
-    send_commands(sock, inputFile);
+    send_commands(sock, inputFile, clientPort);
 }
 
-void send_commands(int sock, char *inputFile){
+void send_commands(int sock, char *inputFile, int clientPort){
     FILE *fp;
     char *line = NULL;
     size_t len = 0;
@@ -62,11 +62,16 @@ void send_commands(int sock, char *inputFile){
 
     int counter = 0;
 
+    char portBuf[6];
+    sprintf(portBuf, "%d\n", clientPort);
+
+    write_line(sock, portBuf, strlen(portBuf));
+
     fp = fopen(inputFile, "r");
     if (fp == NULL){
         close(sock);
         perror_exit("fopen");
-    }   
+    }
     
     while ((size = getline(&line, &len, fp)) != -1){
         write_line(sock, line, len);

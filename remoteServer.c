@@ -16,6 +16,13 @@
 #define MAXMSG 512
 #define MAXCMD 100
 
+#define LS_CMD "ls"
+#define CAT_CMD "cat"
+#define CUT_CMD "cut"
+#define GREP_CMD "grep"
+#define TR_CMD "tr"
+
+
 struct InputCommands {
    char  **commands;
    size_t numCommands;
@@ -30,6 +37,10 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 struct InputCommands *read_from_client(int fileDes);
 struct InputCommands *newline_splitter(char * commands, size_t len, size_t numCommands);
 void allocate_to_children(struct InputCommands *Commands, int *fd, struct sockaddr_in clientname);
+void remove_leading_spaces(char** line);
+void remove_spaces(char* s);
+void remove_trailing_spaces(char** line);
+void to_lowercase(char** line);
 
 int main(int argc, char *argv[])
 {
@@ -127,33 +138,100 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 int child_server(int *fd)
 {
 	close(fd[1]);
+	int maxWrapperSize = MAXCMD+5+21+2;
+	char *cmd = malloc(maxWrapperSize*sizeof(char));
+	char *cmdTmp = malloc(maxWrapperSize*sizeof(char));
+	const char *freeCmd = cmd;
+	const char *freeCmdTmp = cmdTmp;
 
 	while(1){
-		int maxWrapperSize = MAXCMD+5+21+2;
-		char *cmd = malloc(maxWrapperSize*sizeof(char));
 		// char cmdCopy[maxWrapperSize];
 		read(fd[0], cmd, maxWrapperSize+1);
 		char *port = strsep(&cmd, ";");
 		char *ip = strsep(&cmd, ";");
-		// command_to_run(cmd);
+		char result[MAXMSG];
+
+		// Command too large
 		if (strlen(cmd) > MAXCMD){
-			
-		}else{
-			FILE *pipe_fp;
-			char result[MAXMSG];
-			if ((pipe_fp = popen(cmd, "r")) == NULL )
-				perror_exit("popen");
-			/* transfer data from ls to socket */
 			printf("Child %d read '%s' with results '", getpid(), cmd);
-			while(fgets(result, MAXMSG, pipe_fp) != NULL) {
-				printf("%s", result);
-			}
+			sprintf(result, "command too large and was ignored");
+			printf("%s", result);
 			printf("' and will be sent to address '%s' and port '%s' \n", ip, port);
-			pclose(pipe_fp);
+			continue;
 		}
+		
+		remove_leading_spaces(&cmd);
+		remove_trailing_spaces(&cmd);
+		
+		// Command empty
+		if (!*cmd){
+			printf("Child %d read '%s' with results '", getpid(), cmd);
+			sprintf(result, "empty command");
+			printf("%s", result);
+			printf("' and will be sent to address '%s' and port '%s' \n", ip, port);
+			continue;
+		}
+
+		strcpy(cmdTmp, cmd);
+		char *firstCmd = strsep(&cmdTmp, " ");
+		// to_lowercase(firstCmd);
+		// printf("%d ->", !strcmp(firstCmd, LS_CMD));
+		// printf("%d ->", !strcmp(firstCmd, CAT_CMD));
+		// printf("%d ->", !strcmp(firstCmd, CUT_CMD));
+		// printf("%d ->", !strcmp(firstCmd, GREP_CMD));
+		// printf("%d ->", !strcmp(firstCmd, TR_CMD));
+		
+		if (strcmp(firstCmd, LS_CMD) != 0 
+			&& strcmp(firstCmd, CAT_CMD) != 0 
+			&& strcmp(firstCmd, CUT_CMD) != 0 
+			&& strcmp(firstCmd, GREP_CMD) != 0 
+			&& strcmp(firstCmd, TR_CMD)!= 0)
+		{
+			printf("Child %d read '%s' with results '", getpid(), cmd);
+			sprintf(result, "%s: command not found", firstCmd);
+			printf("%s", result);
+			printf("' and will be sent to address '%s' and port '%s' \n", ip, port);
+			continue;
+		}
+
+
+		FILE *pipe_fp;
+		
+		if ((pipe_fp = popen(cmd, "r")) == NULL )
+			perror_exit("popen");
+		/* transfer data from ls to socket */
+		printf("Child %d read '%s' with results '", getpid(), cmd);
+		while(fgets(result, MAXMSG, pipe_fp) != NULL) {
+			printf("%s", result);
+		}
+		printf("' and will be sent to address '%s' and port '%s' \n", ip, port);
+		pclose(pipe_fp);
 		
 		// send_result_with_UDP(cmd);
 		// printf("Child %d read '%s' with result '%s'\n", getpid(), cmd, strlen(cmd));
+	}
+
+	free(freeCmdTmp);
+	free(freeCmd);
+}
+
+void remove_leading_spaces(char** line){
+	int i; 
+	for(i = 0; (*line)[i] == ' '; i++){ 
+		//intentionally left blank
+	}
+	*line += i;
+}
+
+void remove_trailing_spaces(char** line){
+	for(int i = strlen(*line)-1; (*line)[i] == ' '; i--){
+		(*line)[i] = '\0';
+	}
+}
+
+void to_lowercase(char** line){
+	for(int i = 0; (*line)[i]; i++){
+		(*line)[i] = tolower((*line)[i]);
 	}
 }
 
@@ -168,8 +246,7 @@ void allocate_to_children(struct InputCommands *Commands, int *fd, struct sockad
 	}
 }
 
-int make_socket(uint16_t port)
-{
+int make_socket(uint16_t port){
 	int sock;
 	struct sockaddr_in name;
 
@@ -237,6 +314,7 @@ struct InputCommands *read_from_client(int fileDes){
 	if (commands[len-1] != '\n'){
 		numCommands++;
 	}
+	numCommands--; // minus the header for clientport
 	struct InputCommands *Commands = newline_splitter(commands, len, numCommands);
 	// Commands->clientport = atoi(strsep());
 	// Commands->commands = splitted;
@@ -255,6 +333,9 @@ struct InputCommands *newline_splitter(char * commands, size_t len, size_t numCo
 		// printf("Splitted: %s\n", *(splitted+i));
 		// printf("Rest: %s\n", commands);
 		p = strsep(&commands, "\n");
+		if (!*(Commands->commands+i)){
+			*(Commands->commands+i) = "";
+		}
 	}
 	Commands->numCommands = numCommands;
 	return Commands;

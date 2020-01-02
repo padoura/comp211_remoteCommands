@@ -137,8 +137,22 @@ int child_server(int *fd)
 		// command_to_run(cmd);
 		if (strlen(cmd) > MAXCMD){
 			
+		}else{
+			FILE *pipe_fp;
+			char result[MAXMSG];
+			if ((pipe_fp = popen(cmd, "r")) == NULL )
+				perror_exit("popen");
+			/* transfer data from ls to socket */
+			printf("Child %d read '%s' with results '", getpid(), cmd);
+			while(fgets(result, MAXMSG, pipe_fp) != NULL) {
+				printf("%s", result);
+			}
+			printf("'\n");
+			pclose(pipe_fp);
 		}
-		printf("Child %d read '%s' with length %d\n", getpid(), cmd, strlen(cmd));
+		
+		// send_result_with_UDP(cmd);
+		// printf("Child %d read '%s' with result '%s'\n", getpid(), cmd, strlen(cmd));
 	}
 }
 

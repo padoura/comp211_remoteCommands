@@ -65,8 +65,6 @@ void send_commands(int sock, char *inputFile, int clientPort){
     char portBuf[6];
     sprintf(portBuf, "%d\n", clientPort);
 
-    write_line(sock, portBuf, strlen(portBuf));
-
     fp = fopen(inputFile, "r");
     if (fp == NULL){
         close(sock);
@@ -74,6 +72,7 @@ void send_commands(int sock, char *inputFile, int clientPort){
     }
     
     while ((size = getline(&line, &len, fp)) != -1){
+        write_line(sock, portBuf, strlen(portBuf));
         write_line(sock, line, len);
             
         // if (read(sock, buf, MAXCMD) < 0)
@@ -81,6 +80,8 @@ void send_commands(int sock, char *inputFile, int clientPort){
         // printf("%s", buf);
         counter++;
         if (counter % 10 == 0){
+            printf("Waiting...");
+            fflush(stdout);
             counter = 0;
             sleep(5);
         }
@@ -90,7 +91,7 @@ void send_commands(int sock, char *inputFile, int clientPort){
 }
 
 void write_line(int sock, char *line, size_t len){
-    printf("Sending command: %s\n",line);
+    // printf("Sending command: %s\n",line);
     for (int i = 0; i < len && line[i] != '\0'; i++){ 
         /* For every char */
         /* Send i-th character */

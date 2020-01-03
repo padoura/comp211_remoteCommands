@@ -172,7 +172,7 @@ int child_server(int *fd)
 			continue;
 		}
 
-		strcpy(cmdTmp, cmd);
+		memcpy(cmdTmp, cmd, strlen(cmd));
 		char *firstCmd = strsep(&cmdTmp, " ");
 		// to_lowercase(firstCmd);
 		// printf("%d ->", !strcmp(firstCmd, LS_CMD));

@@ -21,6 +21,7 @@
 #define CUT_CMD "cut"
 #define GREP_CMD "grep"
 #define TR_CMD "tr"
+// #define RDSTDERR_CMD " 2>&1"
 
 
 struct InputCommands {
@@ -34,7 +35,7 @@ int child_server(int *fd);
 void perror_exit(char *message);
 pid_t *create_children(int childrenTotal);
 void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid, int *fd);
-struct InputCommands *read_from_client(int fileDes);
+struct InputCommands *read_from_client(int fileDes, fd_set active_fd_set);
 struct InputCommands *newline_splitter(char * commands, size_t len, size_t numCommands);
 void allocate_to_children(struct InputCommands *Commands, int *fd, struct sockaddr_in clientname);
 void remove_leading_spaces(char** line);
@@ -106,7 +107,7 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 		/* Service all the sockets with input pending. */
 		for (i = 0; i < FD_SETSIZE; ++i)
 			if (FD_ISSET(i, &read_fd_set)) {
-				printf("adding fd: %d\n", i);
+				// printf("adding fd: %d\n", i);
 				if (i == sock) {
 					/* Connection request on original socket. */
 					int new;
@@ -120,14 +121,11 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 						ntohs(clientname.sin_port));
 					FD_SET(new, &active_fd_set);
 				} else {
-					struct InputCommands *Commands = read_from_client(i);
+					// printf("same fd: %d, sock: %d\n", i, sock);
+					struct InputCommands *Commands = read_from_client(i, active_fd_set);
 					// for (int i=0; i<Commands->numCommands; i++){
 					// 	printf("%s\n", *(Commands->commands+i));
 					// }
-					//allocate_to_children(commands);
-					printf("Closing TCP connection with socket %d...\n", i);
-					close(i);
-					FD_CLR(i, &active_fd_set);
 
 					allocate_to_children(Commands, fd, clientname);
 				}
@@ -174,12 +172,7 @@ int child_server(int *fd)
 
 		strcpy(cmdTmp, cmd);
 		char *firstCmd = strsep(&cmdTmp, " ");
-		// to_lowercase(firstCmd);
-		// printf("%d ->", !strcmp(firstCmd, LS_CMD));
-		// printf("%d ->", !strcmp(firstCmd, CAT_CMD));
-		// printf("%d ->", !strcmp(firstCmd, CUT_CMD));
-		// printf("%d ->", !strcmp(firstCmd, GREP_CMD));
-		// printf("%d ->", !strcmp(firstCmd, TR_CMD));
+		to_lowercase(&firstCmd);
 		
 		if (strcmp(firstCmd, LS_CMD) != 0 
 			&& strcmp(firstCmd, CAT_CMD) != 0 
@@ -195,8 +188,11 @@ int child_server(int *fd)
 		}
 
 
+
+
 		FILE *pipe_fp;
 		
+		// strcat(cmd, RDSTDERR_CMD);
 		if ((pipe_fp = popen(cmd, "r")) == NULL )
 			perror_exit("popen");
 		/* transfer data from ls to socket */
@@ -292,30 +288,47 @@ pid_t *create_children(int childrenTotal){
 	return pid;
 }
 
-struct InputCommands *read_from_client(int fileDes){
+struct InputCommands *read_from_client(int fileDes, fd_set active_fd_set){
 	char buf[1];
 	char *commands;
 	size_t len = 0;
 	size_t initSize = 100;
 	size_t numCommands = 0;
+	int hasReadPort = 0;
+	int readResult;
 
 	commands = realloc(NULL, sizeof(char)*initSize);
-	printf("Socket %d sent commands:\n", fileDes);
-    while (read(fileDes, buf, 1) > 0){/* Receive 1 char */
+	// printf("Socket %d sent commands:\n", fileDes);
+    while (buf[0] != '\n' && (readResult = read(fileDes, buf, 1) > 0)){/* Receive 1 char */
 		commands[len++]=buf[0];
         if(len==initSize){
             commands = realloc(commands, sizeof(char)*(initSize+=16));
         }
-		if (buf[0] == '\n'){
+		
+		if (buf[0] == '\n' && hasReadPort == 0){ // header for clientport
+			buf[0] = 0;
+			hasReadPort = 1;
+			// printf("port read, %d\n", hasReadPort);
+		}else if (buf[0] == '\n' && hasReadPort == 1){
 			numCommands++;
+			// printf("%s for %d commands", commands, numCommands);
 		}
     }
+
+	// client finish, close connection
+	if (readResult == 0){
+		printf("Closing TCP connection with socket %d...\n", fileDes);
+		fflush(stdout);
+		close(fileDes);
+		FD_CLR(fileDes, &active_fd_set);
+	}
+
 	commands[len]='\0';
 	if (commands[len-1] != '\n'){
 		numCommands++;
 	}
-	numCommands--; // minus the header for clientport
 	struct InputCommands *Commands = newline_splitter(commands, len, numCommands);
+	// printf("%s,%d,%d", *(Commands->commands), Commands->numCommands, Commands->clientport);
 	// Commands->clientport = atoi(strsep());
 	// Commands->commands = splitted;
 	// Commands->numCommands = numCommands;

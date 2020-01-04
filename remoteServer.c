@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <ctype.h>
 
 #define MAXMSG 512
 #define MAXCMD 100
@@ -74,7 +75,7 @@ int main(int argc, char *argv[])
 	if (pipe(fd)==-1){ 
 		perror_exit("pipe"); 
 	}
-	printf("r:%dw:%d\n",fd[0],fd[1]);
+	// printf("r:%dw:%d\n",fd[0],fd[1]);
 	// }
 
 
@@ -103,7 +104,7 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 	int i;
 	struct sockaddr_in clientname;
 	size_t size;
-	// close(fd[0]); // close reading end
+	close(fd[0]); // close reading end
 	while (1) {
 		/* Block until input arrives on one or more active sockets. */
 		read_fd_set = active_fd_set;
@@ -130,11 +131,11 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 					// printf("same fd: %d, sock: %d\n", i, sock);
 					struct InputCommands *Commands = read_from_client(i, active_fd_set);
 					// for (int i=0; i<Commands->numCommands; i++){
-					// 	printf("%s\n", *(Commands->commands+i));
+					// 	printf("cmd: '%s', port '%d', ip '%s'\n", *(Commands->commands+i), Commands->clientport, Commands->numCommands);
 					// }
 					if (Commands->isCompleted == 1){
-						printf("Closing TCP connection with socket %d...\n", i);
-						fflush(stdout);
+						// printf("Closing TCP connection with socket %d...\n", i);
+						// fflush(stdout);
 						close(i);
 						FD_CLR(i, &active_fd_set);
 					}
@@ -147,6 +148,8 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 
 int child_server(int *fd)
 {
+
+	// dup2(1,2);
 	close(fd[1]);
 	int maxWrapperSize = MAXCMD+5+21+2;
 	char *cmd = malloc(maxWrapperSize*sizeof(char));
@@ -155,11 +158,15 @@ int child_server(int *fd)
 	const char *freeCmdTmp = cmdTmp;
 
 	while(1){
-		// char cmdCopy[maxWrapperSize];
-		read(fd[0], cmd, maxWrapperSize+1);
+		// resetting pointers
+		cmd = freeCmd;
+		cmdTmp = freeCmdTmp;
+
+		read(fd[0], cmd, maxWrapperSize);
 		char *port = strsep(&cmd, ";");
 		char *ip = strsep(&cmd, ";");
 		char result[MAXMSG];
+
 
 		// Command too large
 		if (strlen(cmd) > MAXCMD){
@@ -182,7 +189,7 @@ int child_server(int *fd)
 			continue;
 		}
 
-		memcpy(cmdTmp, cmd, strlen(cmd));
+		memcpy(cmdTmp, cmd, maxWrapperSize*sizeof(char));
 		char *firstCmd = strsep(&cmdTmp, " ");
 		to_lowercase(&firstCmd);
 		
@@ -248,7 +255,8 @@ void allocate_to_children(struct InputCommands *Commands, int *fd, struct sockad
 	for(int i=0;i<Commands->numCommands;i++){
 		char cmdbuf[maxWrapperSize];
 		snprintf(cmdbuf, maxWrapperSize, "%d;%s;%s", Commands->clientport, inet_ntoa(clientname.sin_addr), *(Commands->commands+i));
-		if (write(fd[1], cmdbuf, maxWrapperSize+1) == -1){
+		// printf("'%s' length: '%d'\n", cmdbuf, strlen(cmdbuf));
+		if (write(fd[1], cmdbuf, maxWrapperSize) == -1){
 			perror_exit("write of allocate_to_children");
 		}
 	}

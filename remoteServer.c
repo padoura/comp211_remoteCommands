@@ -351,6 +351,8 @@ void allocate_to_children(struct InputCommands *Commands, int *fd, struct sockad
 			perror_exit("write of allocate_to_children");
 		}
 	}
+	free(Commands->commands);
+	free(Commands);
 }
 
 int make_socket(uint16_t port){

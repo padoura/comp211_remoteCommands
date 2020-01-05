@@ -14,6 +14,7 @@
 void perror_exit(char *message);
 void send_commands(int sock, char *inputFile, int clientPort);
 void write_line(int sock, char *line, size_t len);
+pid_t *create_children(int childrenTotal);
 
 void main(int argc, char *argv[])
 {
@@ -22,6 +23,9 @@ void main(int argc, char *argv[])
     struct sockaddr_in server;
     struct sockaddr *serverptr = (struct sockaddr *)&server;
     char *line;
+    pid_t ppid = getpid();
+    int childStatus = 0;
+
     if (argc != 5)
     {
         printf("Please give server name and port number, client port number and input file.\n");
@@ -50,8 +54,20 @@ void main(int argc, char *argv[])
         perror_exit("connect");
     printf("Connecting to %s port %d\n", serverName, serverPort);
     
-    send_commands(sock, inputFile, clientPort);
+    pid_t *pid = create_children(1);
+
+	if (getpid() == ppid){
+		send_commands(sock, inputFile, clientPort);
+        while (wait(&childStatus) > 0); // waiting for all children to exit first
+	}
+	else{
+		// receive_results();
+	}
 }
+
+// void receive_results(){
+
+// }
 
 void send_commands(int sock, char *inputFile, int clientPort){
     FILE *fp;
@@ -98,6 +114,20 @@ void write_line(int sock, char *line, size_t len){
         if (write(sock, line + i, 1) < 0)
             perror_exit("write");
     }
+}
+
+pid_t *create_children(int childrenTotal){
+	pid_t pid[childrenTotal];
+    for(int j=0;j<childrenTotal;j++) {
+		pid[j] = fork();
+        if(pid[j] == 0) { 
+            printf("[child] pid %d from [parent] pid %d\n",getpid(),getppid());
+            break;
+        }else if(pid[j] < 0){
+            perror_exit("fork");
+        }
+    }
+	return pid;
 }
 
 

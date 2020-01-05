@@ -13,6 +13,7 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <ctype.h>
+#include <regex.h>
 
 #define MAXMSG 512
 #define MAXCMD 100
@@ -22,7 +23,6 @@
 #define CUT_CMD "cut"
 #define GREP_CMD "grep"
 #define TR_CMD "tr"
-// #define RDSTDERR_CMD " 2>&1"
 
 
 struct InputCommands {
@@ -44,6 +44,9 @@ void remove_leading_spaces(char** line);
 void remove_spaces(char* s);
 void remove_trailing_spaces(char** line);
 void to_lowercase(char** line);
+void keep_first_command(char *cmd);
+void replace_unquoted_pipes_with_newline(char *cmd);
+void remove_invalid_pipe_commands(char *cmd);
 
 int main(int argc, char *argv[])
 {
@@ -154,13 +157,13 @@ int child_server(int *fd)
 	int maxWrapperSize = MAXCMD+5+21+2;
 	char *cmd = malloc(maxWrapperSize*sizeof(char));
 	char *cmdTmp = malloc(maxWrapperSize*sizeof(char));
-	const char *freeCmd = cmd;
-	const char *freeCmdTmp = cmdTmp;
+	char * const initialCmd = cmd;
+	char * const initialCmdTmp = cmdTmp;
 
 	while(1){
 		// resetting pointers
-		cmd = freeCmd;
-		cmdTmp = freeCmdTmp;
+		cmd = initialCmd;
+		cmdTmp = initialCmdTmp;
 
 		read(fd[0], cmd, maxWrapperSize);
 		char *port = strsep(&cmd, ";");
@@ -177,10 +180,11 @@ int child_server(int *fd)
 			continue;
 		}
 		
+		keep_first_command(cmd);
 		remove_leading_spaces(&cmd);
 		remove_trailing_spaces(&cmd);
 		
-		// Command empty
+		// Command empty (in case client side allows that)
 		if (!*cmd){
 			printf("Child %d read '%s' with results '", getpid(), cmd);
 			sprintf(result, "empty command");
@@ -193,6 +197,7 @@ int child_server(int *fd)
 		char *firstCmd = strsep(&cmdTmp, " ");
 		to_lowercase(&firstCmd);
 		
+		// First command invalid
 		if (strcmp(firstCmd, LS_CMD) != 0 
 			&& strcmp(firstCmd, CAT_CMD) != 0 
 			&& strcmp(firstCmd, CUT_CMD) != 0 
@@ -206,12 +211,10 @@ int child_server(int *fd)
 			continue;
 		}
 
-
-
+		remove_invalid_pipe_commands(cmd);
 
 		FILE *pipe_fp;
 		
-		// strcat(cmd, RDSTDERR_CMD);
 		if ((pipe_fp = popen(cmd, "r")) == NULL )
 			perror_exit("popen");
 		/* transfer data from ls to socket */
@@ -226,9 +229,82 @@ int child_server(int *fd)
 		// printf("Child %d read '%s' with result '%s'\n", getpid(), cmd, strlen(cmd));
 	}
 
-	free(freeCmdTmp);
-	free(freeCmd);
+	free(initialCmdTmp);
+	free(initialCmd);
 }
+
+void remove_invalid_pipe_commands(char *cmd){
+	replace_unquoted_pipes_with_newline(cmd);
+	char * const initialPtr = strsep(&cmd, "\n"); //first command already checked
+	char *firstCmd = strsep(&cmd, "\n");
+	char name[4];
+
+	while(firstCmd != NULL){
+		char *tmpPtr = firstCmd;
+
+		while(*tmpPtr == ' '){
+			tmpPtr++;
+		}
+
+		strncpy(name, tmpPtr, 3);
+		if (strcmp(name, LS_CMD) != 0 
+			&& strcmp(name, CAT_CMD) != 0 
+			&& strcmp(name, CUT_CMD) != 0 
+			&& strcmp(name, GREP_CMD) != 0 
+			&& strcmp(name, TR_CMD)!= 0){
+				cmd = initialPtr;
+				return;
+		}
+
+		*(firstCmd-1)='|';
+		firstCmd = strsep(&cmd, "\n");
+	}
+}
+
+void replace_unquoted_pipes_with_newline(char *cmd){
+	int dQuoteOpen = 0;
+	int sQuoteOpen = 0;
+	for(int i = 0; cmd[i]; i++){
+		if (cmd[i] == '|' && dQuoteOpen == 0 && sQuoteOpen == 0){
+			cmd[i] = '\n';
+		}
+
+		if (cmd[i] == '\"' && cmd[i-1] != '\\' && sQuoteOpen == 0)
+			dQuoteOpen = (dQuoteOpen+1)%2;
+
+		if (cmd[i] == '\'' && cmd[i-1] != '\\' && dQuoteOpen == 0)
+			sQuoteOpen = (sQuoteOpen+1)%2;
+	}
+}
+
+void keep_first_command(char *cmd){
+	int dQuoteOpen = 0;
+	int sQuoteOpen = 0;
+	for(int i = 0; cmd[i]; i++){
+		if (cmd[i] == ';' && dQuoteOpen == 0 && sQuoteOpen == 0){
+			cmd[i] = '\0';
+			return;
+		}
+			
+
+		if (cmd[i] == '\"' && cmd[i-1] != '\\' && sQuoteOpen == 0){
+			dQuoteOpen = (dQuoteOpen+1)%2;
+
+		}
+
+		if (cmd[i] == '\'' && cmd[i-1] != '\\' && dQuoteOpen == 0)
+			sQuoteOpen = (sQuoteOpen+1)%2;
+	}
+}
+
+// void remove_spaces(char* str) {
+//     const char* ptr = str;
+//     do {
+//         while (*ptr == ' ') {
+//             ptr++;
+//         }
+//     } while (*str++ = *ptr++);
+// }
 
 void remove_leading_spaces(char** line){
 	int i; 
@@ -249,6 +325,16 @@ void to_lowercase(char** line){
 		(*line)[i] = tolower((*line)[i]);
 	}
 }
+
+
+// int count_char(char *str, char character){
+// 	int counter = 0;
+// 	for(int i = 0; str[i]; i++){
+// 		if (str[i] == character)
+// 			counter++;
+// 	}
+// 	return counter;
+// }
 
 void allocate_to_children(struct InputCommands *Commands, int *fd, struct sockaddr_in clientname){
 	int maxWrapperSize = MAXCMD+5+21+2;

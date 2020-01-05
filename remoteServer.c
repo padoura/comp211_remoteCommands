@@ -227,6 +227,11 @@ int child_server(int *fd)
 		
 		// send_result_with_UDP(cmd);
 		// printf("Child %d read '%s' with result '%s'\n", getpid(), cmd, strlen(cmd));
+
+		// let child die if parents dies unexpectedly, 1 -> init process
+		if (getppid() == 1){
+			exit(EXIT_SUCCESS);
+		}
 	}
 
 	free(initialCmdTmp);

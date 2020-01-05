@@ -25,11 +25,12 @@
 #define TR_CMD "tr"
 
 
-struct InputCommands {
-   char  **commands;
-   size_t numCommands;
+struct InputCommand {
+   char  *command;
    uint16_t clientport;
    int isCompleted;
+   int cmdNumber;
+   char *initialPtr;
 };
 
 int make_socket(uint16_t port);
@@ -37,9 +38,9 @@ int child_server(int *fd);
 void perror_exit(char *message);
 pid_t *create_children(int childrenTotal);
 void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid, int *fd);
-struct InputCommands *read_from_client(int fileDes, fd_set active_fd_set);
-struct InputCommands *newline_splitter(char * commands, size_t len, size_t numCommands);
-void allocate_to_children(struct InputCommands *Commands, int *fd, struct sockaddr_in clientname);
+struct InputCommand *read_from_client(int fileDes, fd_set active_fd_set);
+struct InputCommand *create_command_struct(char * command, size_t len);
+void allocate_to_children(struct InputCommand *Command, int *fd, struct sockaddr_in clientname);
 void remove_leading_spaces(char** line);
 void remove_spaces(char* s);
 void remove_trailing_spaces(char** line);
@@ -132,18 +133,18 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 					FD_SET(new, &active_fd_set);
 				} else {
 					// printf("same fd: %d, sock: %d\n", i, sock);
-					struct InputCommands *Commands = read_from_client(i, active_fd_set);
-					// for (int i=0; i<Commands->numCommands; i++){
-					// 	printf("cmd: '%s', port '%d', ip '%s'\n", *(Commands->commands+i), Commands->clientport, Commands->numCommands);
+					struct InputCommand *Command = read_from_client(i, active_fd_set);
+					// for (int i=0; i<Command->numCommand; i++){
+					// 	printf("cmd: '%s', port '%d', ip '%s'\n", *(Command->command+i), Command->clientport, Command->numCommand);
 					// }
-					if (Commands->isCompleted == 1){
+					if (Command->isCompleted == 1){
 						// printf("Closing TCP connection with socket %d...\n", i);
 						// fflush(stdout);
 						close(i);
 						FD_CLR(i, &active_fd_set);
 					}
 
-					allocate_to_children(Commands, fd, clientname);
+					allocate_to_children(Command, fd, clientname);
 				}
 			}
 	}
@@ -154,7 +155,7 @@ int child_server(int *fd)
 
 	// dup2(1,2);
 	close(fd[1]);
-	int maxWrapperSize = MAXCMD+5+21+2;
+	int maxWrapperSize = MAXCMD+50;
 	char *cmd = malloc(maxWrapperSize*sizeof(char));
 	char *cmdTmp = malloc(maxWrapperSize*sizeof(char));
 	char * const initialCmd = cmd;
@@ -168,12 +169,13 @@ int child_server(int *fd)
 		read(fd[0], cmd, maxWrapperSize);
 		char *port = strsep(&cmd, ";");
 		char *ip = strsep(&cmd, ";");
+		char *cmdNumber = strsep(&cmd, ";");
 		char result[MAXMSG];
 
 
 		// Command too large
 		if (strlen(cmd) > MAXCMD){
-			printf("Child %d read '%s' with results '", getpid(), cmd);
+			printf("Child %d read n. '%s' '%s' with results '", getpid(), cmdNumber, cmd);
 			sprintf(result, "command too large and was ignored");
 			printf("%s", result);
 			printf("' and will be sent to address '%s' and port '%s' \n", ip, port);
@@ -186,7 +188,7 @@ int child_server(int *fd)
 		
 		// Command empty (in case client side allows that)
 		if (!*cmd){
-			printf("Child %d read '%s' with results '", getpid(), cmd);
+			printf("Child %d read n. '%s' '%s' with results '", getpid(), cmdNumber, cmd);
 			sprintf(result, "empty command");
 			printf("%s", result);
 			printf("' and will be sent to address '%s' and port '%s' \n", ip, port);
@@ -204,7 +206,7 @@ int child_server(int *fd)
 			&& strcmp(firstCmd, GREP_CMD) != 0 
 			&& strcmp(firstCmd, TR_CMD)!= 0)
 		{
-			printf("Child %d read '%s' with results '", getpid(), cmd);
+			printf("Child %d read n. '%s' '%s' with results '", getpid(), cmdNumber, cmd);
 			sprintf(result, "%s: command not found", firstCmd);
 			printf("%s", result);
 			printf("' and will be sent to address '%s' and port '%s' \n", ip, port);
@@ -218,7 +220,7 @@ int child_server(int *fd)
 		if ((pipe_fp = popen(cmd, "r")) == NULL )
 			perror_exit("popen");
 		/* transfer data from ls to socket */
-		printf("Child %d read '%s' with results '", getpid(), cmd);
+		printf("Child %d read n. '%s' '%s' with results '", getpid(), cmdNumber, cmd);
 		while(fgets(result, MAXMSG, pipe_fp) != NULL) {
 			printf("%s", result);
 		}
@@ -341,18 +343,16 @@ void to_lowercase(char** line){
 // 	return counter;
 // }
 
-void allocate_to_children(struct InputCommands *Commands, int *fd, struct sockaddr_in clientname){
-	int maxWrapperSize = MAXCMD+5+21+2;
-	for(int i=0;i<Commands->numCommands;i++){
-		char cmdbuf[maxWrapperSize];
-		snprintf(cmdbuf, maxWrapperSize, "%d;%s;%s", Commands->clientport, inet_ntoa(clientname.sin_addr), *(Commands->commands+i));
-		// printf("'%s' length: '%d'\n", cmdbuf, strlen(cmdbuf));
-		if (write(fd[1], cmdbuf, maxWrapperSize) == -1){
-			perror_exit("write of allocate_to_children");
-		}
+void allocate_to_children(struct InputCommand *Command, int *fd, struct sockaddr_in clientname){
+	int maxWrapperSize = MAXCMD+50; // null termination (1) + MAXCMD (100) + a character to exceed MAXCMD (1) + cmdNumber (10) + port (5) + three delimiters (3) + ip/address (15/30)
+	char cmdbuf[maxWrapperSize];
+	snprintf(cmdbuf, maxWrapperSize-1, "%d;%s;%d;%s", Command->clientport, inet_ntoa(clientname.sin_addr), Command->cmdNumber, Command->command);
+	// printf("'%s' i = '%d'\n", cmdbuf, i);
+	if (write(fd[1], cmdbuf, maxWrapperSize) == -1){
+		perror_exit("write of allocate_to_children");
 	}
-	free(Commands->commands);
-	free(Commands);
+	free(Command->initialPtr);
+	free(Command);
 }
 
 int make_socket(uint16_t port){
@@ -403,69 +403,34 @@ pid_t *create_children(int childrenTotal){
 	return pid;
 }
 
-struct InputCommands *read_from_client(int fileDes, fd_set active_fd_set){
+struct InputCommand *read_from_client(int fileDes, fd_set active_fd_set){
 	char buf[1];
-	char *commands;
 	size_t len = 0;
-	size_t initSize = 100;
-	size_t numCommands = 0;
-	int hasReadPort = 0;
+	size_t initSize = 119; // based on client's msg size
 	int readResult;
-
-	commands = realloc(NULL, sizeof(char)*initSize);
-	// printf("Socket %d sent commands:\n", fileDes);
-    while (buf[0] != '\n' && (readResult = read(fileDes, buf, 1) > 0)){/* Receive 1 char */
-		commands[len++]=buf[0];
+	struct InputCommand *Command = malloc(sizeof(struct InputCommand));
+	Command->command = realloc(NULL, sizeof(char)*initSize);
+	// printf("Socket %d sent command:\n", fileDes);
+    while ((readResult = read(fileDes, buf, 1) > 0) && buf[0] != '\n'){/* Receive 1 char */
+		Command->command[len++]=buf[0];
         if(len==initSize){
-            commands = realloc(commands, sizeof(char)*(initSize+=16));
+            Command->command = realloc(Command->command, sizeof(char)*(initSize+=16));
         }
-		
-		if (buf[0] == '\n' && hasReadPort == 0){ // header for clientport
-			buf[0] = 0;
-			hasReadPort = 1;
-			// printf("port read, %d\n", hasReadPort);
-		}else if (buf[0] == '\n' && hasReadPort == 1){
-			numCommands++;
-			// printf("%s for %d commands", commands, numCommands);
-		}
     }
+	Command->initialPtr = Command->command;
 
+	// null termination
+	Command->command[len]='\0';
 
-	commands[len]='\0';
-	if (commands[len-1] != '\n'){
-		numCommands++;
-	}
-	struct InputCommands *Commands = newline_splitter(commands, len, numCommands);
+	Command->cmdNumber = atoi(strsep(&Command->command, ";"));
+	Command->clientport = atoi(strsep(&Command->command, ";"));
 	// client finish, close connection
 	if (readResult == 0){
-		Commands->isCompleted = 1;
+		Command->isCompleted = 1;
 	}else{
-		Commands->isCompleted = 0;
+		Command->isCompleted = 0;
 	}
-	// printf("%s,%d,%d", *(Commands->commands), Commands->numCommands, Commands->clientport);
-	// Commands->clientport = atoi(strsep());
-	// Commands->commands = splitted;
-	// Commands->numCommands = numCommands;
-	// free(commands);
-	return Commands;
-}
-
-struct InputCommands *newline_splitter(char * commands, size_t len, size_t numCommands){
-	struct InputCommands *Commands = malloc(sizeof(struct InputCommands));
-	Commands->commands = malloc(sizeof(char*)*numCommands);
-	Commands->clientport = atoi(strsep(&commands, "\n"));
-	char *p = strsep(&commands, "\n");
-	for (int i=0; i<numCommands; i++){
-		*(Commands->commands+i)=p;
-		// printf("Splitted: %s\n", *(splitted+i));
-		// printf("Rest: %s\n", commands);
-		p = strsep(&commands, "\n");
-		if (!*(Commands->commands+i)){
-			*(Commands->commands+i) = "";
-		}
-	}
-	Commands->numCommands = numCommands;
-	return Commands;
+	return Command;
 }
 
 void perror_exit(char *message){

@@ -389,6 +389,8 @@ pid_t *create_children(int childrenTotal){
         if(pid[j] == 0) { 
             printf("[child] pid %d from [parent] pid %d\n",getpid(),getppid());
             break;
+        }else if(pid[j] < 0){
+            perror_exit("fork");
         }
     }
 	return pid;

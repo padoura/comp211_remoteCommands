@@ -10,12 +10,13 @@
 #define MAX_MSG 512
 
 void perror_exit(char *message);
-void send_commands(int sock, char *inputFile, int clientPort);
+void send_commands(int sock, FILE *fp, int clientPort);
 void write_line(int sock, char *line, size_t len);
 pid_t *create_children(int childrenTotal);
-void receive_results(uint16_t clientPort);
+void receive_results(uint16_t clientPort, size_t cmdTotal);
 int make_socket(uint16_t port);
-char *name_from_address(struct in_addr addr);
+size_t count_lines(FILE *fp);
+size_t count_digits(size_t n);
 
 void main(int argc, char *argv[])
 {
@@ -54,52 +55,125 @@ void main(int argc, char *argv[])
     if (connect(sock, serverptr, sizeof(server)) < 0)
         perror_exit("connect");
     // printf("Connecting to %s port %d\n", serverName, serverPort);
+
+    FILE *fp;
+    fp = fopen(inputFile, "r");
+    if (fp == NULL){
+        close(sock);
+        perror_exit("fopen");
+    }
+    size_t cmdTotal = count_lines(fp);
+    rewind(fp);
     
     pid_t *pid = create_children(1);
 
 	if (getpid() == ppid){
-		send_commands(sock, inputFile, clientPort);
+		send_commands(sock, fp, clientPort);
         while (wait(&childStatus) > 0); // waiting for all children to exit first
 	}
 	else{
-		receive_results(clientPort);
+		receive_results(clientPort, cmdTotal);
 	}
 }
 
-void receive_results(uint16_t clientPort){
-    int n, sock;
-    char buf[MAX_MSG+1];
-    char *clientname;
-    struct sockaddr_in client;
-    struct sockaddr_in *clientPtr = (struct sockaddr*) &client;
-    unsigned int clientlen;
+size_t count_lines(FILE *fp){
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t size;
 
+    size_t counter = 0;
+    
+    while ((size = getline(&line, &len, fp)) != -1){
+        counter++;
+    }
+    free(line);
+    return counter;
+}
+
+void receive_results(uint16_t clientPort, size_t cmdTotal){
+    int sock;
+    char *buf = malloc((MAX_MSG+1)*sizeof(char));
+    char * const initBuf = buf;
+    char *servername;
+    struct sockaddr_in server;
+    struct sockaddr_in *serverPtr = (struct sockaddr*) &server;
+    unsigned int serverlen;
+
+
+    // strings for checking progress
+    char resultReceived[cmdTotal+1];
+    char expectedResultReceived[cmdTotal+1];
+    for (int i = 0; i < cmdTotal; i++){
+        resultReceived[i] = '0';
+    }
+    for (int i = 0; i < cmdTotal; i++){
+        expectedResultReceived[i] = '1';
+    }
+    resultReceived[cmdTotal] = '\0';
+    expectedResultReceived[cmdTotal] = '\0';
 
     sock = make_socket(clientPort);
 
-    while(1) { 
-        clientlen = sizeof(client);
+    while(strcmp(resultReceived, expectedResultReceived) != 0) {
+        serverlen = sizeof(server);
         /* Receive message */
-        if ((n = recvfrom(sock, buf, sizeof(buf), 0, clientPtr, &clientlen)) < 0)
+        if ((recvfrom(sock, buf, sizeof(buf), 0, serverPtr, &serverlen)) < 0)
             perror_exit("recvfrom");
 
+        printf("%s", buf);
+        fflush(stdout);
         buf[sizeof(buf)-1]='\0'; /* force str termination */
 
-        /* Try to discover client’s name */
-        clientname = name_from_address(client.sin_addr);
-        printf("Received from %s: %s\n", clientname , buf); /* Send message */
+        // printf("%s\n", cmdResult); /* Send message */
+        
+        // parsing result with expected format
+        int cmdNumLen = atoi(strsep(&buf, ";"));
+        int partNumLen = atoi(strsep(&buf, ";"));
+        int cmdResultLen = atoi(strsep(&buf, ";"));
+        char *cmdNumber = strsep(&buf, ";");
+        char *partNum = strsep(&buf, ";");
+        char *cmdResult = buf;
+        buf = initBuf;
 
-        if (sendto(sock, buf, n, 0, clientPtr, clientlen)<0)
-            perror_exit("sendto");
+
+
+        if (cmdNumLen == strlen(cmdNumber) &&
+            partNumLen == strlen(partNum) &&
+            cmdResultLen == strlen(cmdResult) &&
+            atoi(cmdNumber) > 0 &&
+            atoi(cmdNumber) <= cmdTotal
+        ){
+            //prepare ACK
+            char msg[count_digits(clientPort) + strlen(cmdNumber) + count_digits(partNum) + 6]; // port;cmdNumber;partNum;ACK
+            sprintf(msg, "%s;%s;%d;ACK", clientPort, cmdNumber, partNum);
+            if (sendto(sock, msg, sizeof(msg), 0, serverPtr, serverlen)<0)
+                perror_exit("sendto");
+            
+            //write result to appropriate file
+            FILE *fp;
+            char filename[15 + count_digits(clientPort) + strlen(cmdNumber)]; //output.receive{clientPort}.{cmdNumber}
+            sprintf(filename, "output.receive%u.%s", clientPort, cmdNumber);
+            fp = fopen(filename, "a");
+            fprintf(fp, cmdResult);
+            fclose(fp);
+
+            if ((strstr(partNum, "f") != NULL)){
+                *(resultReceived+atoi(cmdNumber)-1) = '1';
+            }
+        }
     }
+
+    close(sock);
+    free(buf);
 }
 
-char *name_from_address(struct in_addr addr){
-    struct hostent *rem;
-    int asize = sizeof(addr.s_addr);
-    if((rem = gethostbyaddr(&addr.s_addr, asize, AF_INET)))
-        return rem->h_name; /* reverse lookup success */
-    return inet_ntoa(addr); /* fallback to a.b.c.d form */
+size_t count_digits(size_t n){
+	size_t counter = 0;
+	while (n != 0) {
+		n /= 10;
+		counter++;
+    }
+	return counter;
 }
 
 
@@ -116,8 +190,6 @@ int make_socket(uint16_t port){
     server.sin_addr.s_addr = htonl(INADDR_ANY);
     server.sin_port = htons(port);
     serverlen = sizeof(server);
-    if (bind(sock, serverPtr, serverlen) < 0)
-        perror_exit("bind");
     
     /* Discover selected port */
     if (getsockname(sock, serverPtr, &serverlen) < 0)
@@ -136,7 +208,7 @@ int make_socket(uint16_t port){
         perror_exit("setsockopt");
     }
 
-	if (bind(sock, serverPtr, sizeof(server)) < 0) {
+	if (bind(sock, serverPtr, serverlen) < 0) {
         perror_exit("bind");
 	}
 
@@ -145,29 +217,22 @@ int make_socket(uint16_t port){
 }
 
 
-void send_commands(int sock, char *inputFile, int clientPort){
-    FILE *fp;
+void send_commands(int sock, FILE *fp, int clientPort){
     char *line = NULL;
     size_t len = 0;
     ssize_t size;
 
     int counter = 0;
-
-    fp = fopen(inputFile, "r");
-    if (fp == NULL){
-        close(sock);
-        perror_exit("fopen");
-    }
-    
     while ((size = getline(&line, &len, fp)) != -1){
         counter++;
-        char lineBuf[strlen(line)+18]; // length of line + int counter (10) + two ";" delimiters (2) + port (5) + null termination (1)
-        snprintf(lineBuf, strlen(line)+17, "%d;%d;%s", counter, clientPort, line);
+        char lineBuf[len+18]; // length of line + int counter (10) + two ";" delimiters (2) + port (5) + null termination (1)
+        snprintf(lineBuf, len+17, "%d;%d;%s", counter, clientPort, line);
         write_line(sock, lineBuf, strlen(lineBuf));
         if (counter % 10 == 0){
             sleep(5);
         }
     }
+    free(line);
     close(sock);
     fclose(fp);
 }

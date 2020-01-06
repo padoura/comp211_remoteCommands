@@ -7,8 +7,7 @@
 #include <stdlib.h>       /* exit */
 #include <string.h>       /* strlen */
 
-#define MAXMSG 512
-#define MAXCMD 101
+#define MAX_MSG 512
 
 void perror_exit(char *message);
 void send_commands(int sock, char *inputFile, int clientPort);
@@ -69,7 +68,7 @@ void main(int argc, char *argv[])
 
 void receive_results(uint16_t clientPort){
     int n, sock;
-    char buf[MAXMSG];
+    char buf[MAX_MSG+1];
     char *clientname;
     struct sockaddr_in client;
     struct sockaddr_in *clientPtr = (struct sockaddr*) &client;
@@ -151,7 +150,6 @@ void send_commands(int sock, char *inputFile, int clientPort){
     char *line = NULL;
     size_t len = 0;
     ssize_t size;
-    char buf[MAXMSG];
 
     int counter = 0;
 
@@ -166,13 +164,7 @@ void send_commands(int sock, char *inputFile, int clientPort){
         char lineBuf[strlen(line)+18]; // length of line + int counter (10) + two ";" delimiters (2) + port (5) + null termination (1)
         snprintf(lineBuf, strlen(line)+17, "%d;%d;%s", counter, clientPort, line);
         write_line(sock, lineBuf, strlen(lineBuf));
-            
-        // if (read(sock, buf, MAXCMD) < 0)
-        //     perror_exit("read");
-        // printf("%s", buf);
         if (counter % 10 == 0){
-            // printf("Waiting...");
-            // fflush(stdout);
             sleep(5);
         }
     }

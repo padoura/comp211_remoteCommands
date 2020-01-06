@@ -1,7 +1,3 @@
-/*
- * Tcp server with select() example:
- * http://www.gnu.org/software/libc/manual/html_node/Server-Example.html
- */
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -15,8 +11,10 @@
 #include <ctype.h>
 #include <regex.h>
 
-#define MAXMSG 512
-#define MAXCMD 100
+#define MAX_MSG 512
+#define MAX_CMD 100
+// null termination (1) + ignore stderr (12)  + MAX_CMD (100) + a character to exceed MAX_CMD (1) + cmdNumber (10) + port (5) + three delimiters (3) + ip/address (up to 30)
+#define MAX_CMD_PLUS_HEADER MAX_CMD+62
 
 #define LS_CMD "ls"
 #define CAT_CMD "cat"
@@ -48,6 +46,9 @@ void to_lowercase(char** line);
 void keep_first_command(char *cmd);
 void replace_unquoted_pipes_with_newline(char *cmd);
 void remove_invalid_pipe_commands(char *cmd);
+void send_result_with_UDP(char *port, char *ip, char *result, size_t packets);
+size_t count_digits(size_t n);
+
 
 int main(int argc, char *argv[])
 {
@@ -150,14 +151,14 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 	}
 }
 
-int child_server(int *fd)
-{
+int child_server(int *fd){
 
-	// dup2(1,2);
 	close(fd[1]);
-	int maxWrapperSize = MAXCMD+50;
-	char *cmd = malloc(maxWrapperSize*sizeof(char));
-	char *cmdTmp = malloc(maxWrapperSize*sizeof(char));
+	char *cmd = malloc(MAX_CMD_PLUS_HEADER*sizeof(char));
+	char *cmdTmp = malloc(MAX_CMD_PLUS_HEADER*sizeof(char));
+	size_t initSize = MAX_MSG+1; // +1 for null termination between messages
+	char *result = realloc(NULL, 2*sizeof(char)*(initSize));
+	char *resultPtr = result;
 	char * const initialCmd = cmd;
 	char * const initialCmdTmp = cmdTmp;
 
@@ -165,79 +166,173 @@ int child_server(int *fd)
 		// resetting pointers
 		cmd = initialCmd;
 		cmdTmp = initialCmdTmp;
+		size_t partNum = 0;
 
-		read(fd[0], cmd, maxWrapperSize);
+		read(fd[0], cmd, MAX_CMD_PLUS_HEADER-1);
 		char *port = strsep(&cmd, ";");
 		char *ip = strsep(&cmd, ";");
 		char *cmdNumber = strsep(&cmd, ";");
-		char result[MAXMSG];
+		unsigned int resultNum;
 
+
+
+		/* adding headers
+		The transferred message has the form:
+		partNumLen;cmdResultLen;partNum;cmdResult
+		*/
+		// resultPtr += sprintf(resultPtr, "%d;%s;%s;",strlen(port)+strlen(ip)+,port,ip);
 
 		// Command too large
-		if (strlen(cmd) > MAXCMD){
-			printf("Child %d read n. '%s' '%s' with results '", getpid(), cmdNumber, cmd);
-			sprintf(result, "command too large and was ignored");
-			printf("%s", result);
-			printf("' and will be sent to address '%s' and port '%s' \n", ip, port);
-			continue;
-		}
-		
-		keep_first_command(cmd);
-		remove_leading_spaces(&cmd);
-		remove_trailing_spaces(&cmd);
-		
-		// Command empty (in case client side allows that)
-		if (!*cmd){
-			printf("Child %d read n. '%s' '%s' with results '", getpid(), cmdNumber, cmd);
-			sprintf(result, "empty command");
-			printf("%s", result);
-			printf("' and will be sent to address '%s' and port '%s' \n", ip, port);
-			continue;
-		}
+		if (strlen(cmd) > MAX_CMD){
+			partNum++;
+			sprintf(result, "%d;%d;%s;%s", 2, 0, "1f", "");
+		}else{
+			keep_first_command(cmd);
+			remove_leading_spaces(&cmd);
+			remove_trailing_spaces(&cmd);
+			
+			// Command empty (in case client side allows that)
+			if (!*cmd){
+				// printf("Child %d read n. '%s' '%s' with results '", getpid(), cmdNumber, cmd);
+				partNum++;
+				sprintf(result, "%d;%d;%s;%s", 2, 0, "1f", "");
+				// sprintf(result, "empty command");
+				// printf("%s", result);
+				// printf("' and will be sent to address '%s' and port '%s' \n", ip, port);
+				// continue;
+			}else{
+				memcpy(cmdTmp, cmd, MAX_CMD_PLUS_HEADER*sizeof(char));
+				char *firstCmd = strsep(&cmdTmp, " ");
+				to_lowercase(&firstCmd);
+				
+				// First command invalid
+				if (strcmp(firstCmd, LS_CMD) != 0 
+					&& strcmp(firstCmd, CAT_CMD) != 0 
+					&& strcmp(firstCmd, CUT_CMD) != 0 
+					&& strcmp(firstCmd, GREP_CMD) != 0 
+					&& strcmp(firstCmd, TR_CMD)!= 0)
+				{
+					partNum++;
+					sprintf(result, "%d;%d;%s;%s", 2, 0, "1f", "");
+				}else{ // command acceptable, proceed with popen
+					remove_invalid_pipe_commands(cmd);
 
-		memcpy(cmdTmp, cmd, maxWrapperSize*sizeof(char));
-		char *firstCmd = strsep(&cmdTmp, " ");
-		to_lowercase(&firstCmd);
-		
-		// First command invalid
-		if (strcmp(firstCmd, LS_CMD) != 0 
-			&& strcmp(firstCmd, CAT_CMD) != 0 
-			&& strcmp(firstCmd, CUT_CMD) != 0 
-			&& strcmp(firstCmd, GREP_CMD) != 0 
-			&& strcmp(firstCmd, TR_CMD)!= 0)
-		{
-			printf("Child %d read n. '%s' '%s' with results '", getpid(), cmdNumber, cmd);
-			sprintf(result, "%s: command not found", firstCmd);
-			printf("%s", result);
-			printf("' and will be sent to address '%s' and port '%s' \n", ip, port);
-			continue;
-		}
+					// ignore stderr
+					sprintf(cmd+strlen(cmd), " 2>/dev/null");
 
-		remove_invalid_pipe_commands(cmd);
-
-		FILE *pipe_fp;
-		
-		if ((pipe_fp = popen(cmd, "r")) == NULL )
-			perror_exit("popen");
-		/* transfer data from ls to socket */
-		printf("Child %d read n. '%s' '%s' with results '", getpid(), cmdNumber, cmd);
-		while(fgets(result, MAXMSG, pipe_fp) != NULL) {
-			printf("%s", result);
+					
+					FILE *pipe_fp;
+					if ((pipe_fp = popen(cmd, "r")) == NULL ){
+						perror_exit("popen");
+					}
+					/* build result in null-separated MAX_MSG-sized packets */
+					size_t iterSize = MAX_MSG - 3 - 2 - 3; // delimiters (3), partNum (2), strlen(buffer) (3)
+					char nextBuffer[iterSize+1];
+					char buffer[iterSize+1];
+					char *fgetsRes = fgets(nextBuffer, iterSize, pipe_fp);
+					while(1) {
+						if (fgetsRes != NULL){
+							sprintf(buffer,"%s",nextBuffer);
+							partNum++;
+							sprintf(resultPtr, "%d;%d;%d;%s", count_digits(partNum), strlen(buffer), partNum, buffer);
+							if (partNum*(MAX_MSG + 1) == initSize){
+								result = realloc(result, sizeof(char)*(initSize += MAX_MSG+1));
+							}
+							resultPtr = result + partNum*(MAX_MSG + 1); // each part of message has MAX_MSG characters + null termination
+							// digits increased for storing partNum
+							if (count_digits(partNum) != count_digits(partNum-1)){
+								iterSize -= 1;
+								if (count_digits(partNum) == 9 || count_digits(partNum) == 99 || count_digits(partNum) == 999){ 
+									// larger cases should be timed out anyway
+									iterSize -= 1;
+								}
+							}
+							fgetsRes = fgets(nextBuffer, iterSize, pipe_fp);
+						}else if (partNum > 0){ // finish flag
+							resultPtr = resultPtr - (MAX_MSG + 1);
+							sprintf(resultPtr, "%d;%d;%d%c;%s", count_digits(partNum)+1, strlen(buffer), partNum, 'f', buffer);
+							break;
+						}else{
+							partNum++;
+							sprintf(result, "%d;%d;%s;%s", 2, 0, "1f", "");
+							break;
+						}
+					}
+					pclose(pipe_fp);
+				}
+			}
 		}
-		printf("' and will be sent to address '%s' and port '%s' \n", ip, port);
-		pclose(pipe_fp);
 		
-		// send_result_with_UDP(cmd);
-		// printf("Child %d read '%s' with result '%s'\n", getpid(), cmd, strlen(cmd));
+		send_result_with_UDP(port, ip, result, partNum);
 
-		// let child die if parents dies unexpectedly, 1 -> init process
-		if (getppid() == 1){
-			exit(EXIT_SUCCESS);
+		// let child die if parent dies unexpectedly, 1 -> init process
+		if (getppid() <= 1){
+			break;
 		}
+		
 	}
 
+	close(fd[0]);
+	free(result);
 	free(initialCmdTmp);
 	free(initialCmd);
+	exit(EXIT_SUCCESS);
+}
+
+size_t count_digits(size_t n){
+	size_t counter = 0;
+	while (n != 0) {
+		n /= 10;
+		counter++;
+    }
+	return counter;
+}
+
+void send_result_with_UDP(char *port, char *ip, char *result, size_t packets){
+	int sock;
+	struct hostent *rem;
+	struct sockaddr_in server, client;
+	unsigned int serverlen = sizeof(server);
+	struct sockaddr *serverPtr = (struct sockaddr *) &server;
+	struct sockaddr *clientPtr = (struct sockaddr *) &client;
+	char buf[3];
+
+	/* Create socket */
+	if ((sock = socket(AF_INET , SOCK_DGRAM , 0)) < 0){
+		perror_exit("socket");
+	}
+	/* Find server ’s IP address */
+	if ((rem = gethostbyname(ip)) == NULL) {
+		perror_exit("gethostbyname");
+	}
+
+	/* Setup server’s IP address and port */
+	server.sin_family = AF_INET; /* Internet domain */
+	memcpy(&server.sin_addr, rem->h_addr, rem->h_length);
+	server.sin_port = htons(atoi(port));
+	/* Setup my address */
+	client.sin_family = AF_INET; /* Internet domain */
+	client.sin_addr.s_addr = htonl(INADDR_ANY); /*Any address*/
+	client.sin_port = htons(0); /* Autoselect port */
+
+	/* Bind my socket to my address*/
+	if (bind(sock, clientPtr, sizeof(client)) < 0) {
+		perror_exit("bind");
+	}
+
+	for (int i=0;i<packets;i++){
+		do{
+			// buf[strlen(buf)-1] = '\0'; /* Remove ’\n’ */
+			if (sendto(sock, result+i*(MAX_MSG+1), strlen(result+i*(MAX_MSG+1))+1, 0, serverPtr, serverlen) < 0) {
+				perror_exit("sendto");
+			}
+			/* Send message */
+			if (recvfrom(sock, buf, sizeof(buf), 0, NULL, NULL) < 0) {
+				perror_exit("recvfrom");
+			}
+		}while(!strcmp(buf, "ACK"));
+	}
+	close(sock);
 }
 
 void remove_invalid_pipe_commands(char *cmd){
@@ -254,6 +349,7 @@ void remove_invalid_pipe_commands(char *cmd){
 		}
 
 		strncpy(name, tmpPtr, 3);
+		to_lowercase(&name);
 		if (strcmp(name, LS_CMD) != 0 
 			&& strcmp(name, CAT_CMD) != 0 
 			&& strcmp(name, CUT_CMD) != 0 
@@ -304,15 +400,6 @@ void keep_first_command(char *cmd){
 	}
 }
 
-// void remove_spaces(char* str) {
-//     const char* ptr = str;
-//     do {
-//         while (*ptr == ' ') {
-//             ptr++;
-//         }
-//     } while (*str++ = *ptr++);
-// }
-
 void remove_leading_spaces(char** line){
 	int i; 
 	for(i = 0; (*line)[i] == ' '; i++){ 
@@ -333,22 +420,12 @@ void to_lowercase(char** line){
 	}
 }
 
-
-// int count_char(char *str, char character){
-// 	int counter = 0;
-// 	for(int i = 0; str[i]; i++){
-// 		if (str[i] == character)
-// 			counter++;
-// 	}
-// 	return counter;
-// }
-
 void allocate_to_children(struct InputCommand *Command, int *fd, struct sockaddr_in clientname){
-	int maxWrapperSize = MAXCMD+50; // null termination (1) + MAXCMD (100) + a character to exceed MAXCMD (1) + cmdNumber (10) + port (5) + three delimiters (3) + ip/address (15/30)
-	char cmdbuf[maxWrapperSize];
-	snprintf(cmdbuf, maxWrapperSize-1, "%d;%s;%d;%s", Command->clientport, inet_ntoa(clientname.sin_addr), Command->cmdNumber, Command->command);
+	// int maxWrapperSize = MAX_CMD+50; 
+	char cmdbuf[MAX_CMD_PLUS_HEADER];
+	snprintf(cmdbuf, MAX_CMD_PLUS_HEADER-1, "%d;%s;%d;%s", Command->clientport, inet_ntoa(clientname.sin_addr), Command->cmdNumber, Command->command);
 	// printf("'%s' i = '%d'\n", cmdbuf, i);
-	if (write(fd[1], cmdbuf, maxWrapperSize) == -1){
+	if (write(fd[1], cmdbuf, MAX_CMD_PLUS_HEADER-1) == -1){
 		perror_exit("write of allocate_to_children");
 	}
 	free(Command->initialPtr);

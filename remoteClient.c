@@ -1,4 +1,3 @@
-/* i n e t _ s t r _ c l i e n t .c: Internet stream sockets client */
 #include <stdio.h>
 #include <sys/types.h>  /* sockets */
 #include <sys/socket.h> /* sockets */
@@ -15,10 +14,14 @@ void perror_exit(char *message);
 void send_commands(int sock, char *inputFile, int clientPort);
 void write_line(int sock, char *line, size_t len);
 pid_t *create_children(int childrenTotal);
+void receive_results(uint16_t clientPort);
+int make_socket(uint16_t port);
+char *name_from_address(struct in_addr addr);
 
 void main(int argc, char *argv[])
 {
-    int serverPort, clientPort, sock, i;
+    int sock, i;
+    uint16_t serverPort, clientPort;
     struct hostent *rem;
     struct sockaddr_in server;
     struct sockaddr *serverptr = (struct sockaddr *)&server;
@@ -41,8 +44,7 @@ void main(int argc, char *argv[])
         perror_exit("socket");
     /* Find server address */
     if ((rem = gethostbyname(serverName)) == NULL){
-        herror("gethostbyname");
-        exit(1);
+        perror_exit("gethostbyname");
     }
     
     server.sin_family = AF_INET; /* Internet domain */
@@ -52,7 +54,7 @@ void main(int argc, char *argv[])
     /* Initiate connection */
     if (connect(sock, serverptr, sizeof(server)) < 0)
         perror_exit("connect");
-    printf("Connecting to %s port %d\n", serverName, serverPort);
+    // printf("Connecting to %s port %d\n", serverName, serverPort);
     
     pid_t *pid = create_children(1);
 
@@ -61,13 +63,88 @@ void main(int argc, char *argv[])
         while (wait(&childStatus) > 0); // waiting for all children to exit first
 	}
 	else{
-		// receive_results();
+		receive_results(clientPort);
 	}
 }
 
-// void receive_results(){
+void receive_results(uint16_t clientPort){
+    int n, sock;
+    char buf[MAXMSG];
+    char *clientname;
+    struct sockaddr_in client;
+    struct sockaddr_in *clientPtr = (struct sockaddr*) &client;
+    unsigned int clientlen;
 
-// }
+
+    sock = make_socket(clientPort);
+
+    while(1) { 
+        clientlen = sizeof(client);
+        /* Receive message */
+        if ((n = recvfrom(sock, buf, sizeof(buf), 0, clientPtr, &clientlen)) < 0)
+            perror_exit("recvfrom");
+
+        buf[sizeof(buf)-1]='\0'; /* force str termination */
+
+        /* Try to discover client’s name */
+        clientname = name_from_address(client.sin_addr);
+        printf("Received from %s: %s\n", clientname , buf); /* Send message */
+
+        if (sendto(sock, buf, n, 0, clientPtr, clientlen)<0)
+            perror_exit("sendto");
+    }
+}
+
+char *name_from_address(struct in_addr addr){
+    struct hostent *rem;
+    int asize = sizeof(addr.s_addr);
+    if((rem = gethostbyaddr(&addr.s_addr, asize, AF_INET)))
+        return rem->h_name; /* reverse lookup success */
+    return inet_ntoa(addr); /* fallback to a.b.c.d form */
+}
+
+
+int make_socket(uint16_t port){
+    int sock;
+    struct sockaddr_in server;
+    struct sockaddr_in *serverPtr = (struct sockaddr*) &server;
+    unsigned int serverlen;
+    if ((sock = socket(AF_INET , SOCK_DGRAM , 0)) < 0) 
+        perror_exit("socket");
+    
+    /* Bind socket to address */
+    server.sin_family = AF_INET; /* Internet domain */
+    server.sin_addr.s_addr = htonl(INADDR_ANY);
+    server.sin_port = htons(port);
+    serverlen = sizeof(server);
+    if (bind(sock, serverPtr, serverlen) < 0)
+        perror_exit("bind");
+    
+    /* Discover selected port */
+    if (getsockname(sock, serverPtr, &serverlen) < 0)
+        perror_exit("getsockname");
+    // printf("Socket port: %d\n", ntohs(server.sin_port));
+
+	// Allow reuse of socket before bind when server quits
+    int option = 1;
+    int optLen = sizeof(option);
+    if(
+        setsockopt(sock,SOL_SOCKET,SO_REUSEPORT,&option,optLen) < 0 ||
+        setsockopt(sock,SOL_SOCKET,SO_REUSEADDR,&option,optLen) < 0
+    )
+    {
+        close(sock);
+        perror_exit("setsockopt");
+    }
+
+	if (bind(sock, serverPtr, sizeof(server)) < 0) {
+        perror_exit("bind");
+	}
+
+
+    return sock;
+}
+
 
 void send_commands(int sock, char *inputFile, int clientPort){
     FILE *fp;
@@ -94,8 +171,8 @@ void send_commands(int sock, char *inputFile, int clientPort){
         //     perror_exit("read");
         // printf("%s", buf);
         if (counter % 10 == 0){
-            printf("Waiting...");
-            fflush(stdout);
+            // printf("Waiting...");
+            // fflush(stdout);
             sleep(5);
         }
     }
@@ -118,7 +195,7 @@ pid_t *create_children(int childrenTotal){
     for(int j=0;j<childrenTotal;j++) {
 		pid[j] = fork();
         if(pid[j] == 0) { 
-            printf("[child] pid %d from [parent] pid %d\n",getpid(),getppid());
+            // printf("[child] pid %d from [parent] pid %d\n",getpid(),getppid());
             break;
         }else if(pid[j] < 0){
             perror_exit("fork");

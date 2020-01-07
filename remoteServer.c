@@ -44,8 +44,8 @@ void remove_spaces(char* s);
 void remove_trailing_spaces(char** line);
 void to_lowercase(char** line);
 void keep_first_command(char *cmd);
-void replace_unquoted_pipes_with_newline(char *cmd);
-void remove_invalid_pipe_commands(char *cmd);
+void replace_unquoted_pipes_with_newline(char **cmd);
+void remove_invalid_pipe_commands(char **cmd);
 void send_result_with_UDP(char *port, char *ip, char *result, size_t packetNum, char *cmdNumber);
 size_t count_digits(size_t n);
 
@@ -87,7 +87,7 @@ int main(int argc, char *argv[])
 	if (listen(sock, 1) < 0) {
         perror_exit("listen");
 	}
-	printf("Listening for connections to port %d with total children processes: %d\n", port, childrenTotal);
+	// printf("Listening for connections to port %d with total children processes: %d\n", port, childrenTotal);
 
 	/* Initialize the set of active sockets. */
 	FD_ZERO(&active_fd_set);
@@ -127,9 +127,9 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 					if (new < 0) {
                         perror_exit("accept");
 					}
-					printf("Server: connect from host %s port %d.\n",
-						inet_ntoa(clientname.sin_addr),
-						ntohs(clientname.sin_port));
+					// printf("Server: connect from host %s port %d.\n",
+					// 	inet_ntoa(clientname.sin_addr),
+					// 	ntohs(clientname.sin_port));
 					FD_SET(new, &active_fd_set);
 				} else {
 					// printf("same fd: %d, sock: %d\n", i, sock);
@@ -168,6 +168,8 @@ int child_server(int *fd){
 		size_t partNum = 0;
 
 		read(fd[0], cmd, MAX_CMD_PLUS_HEADER-1);
+
+
 		char *port = strsep(&cmd, ";");
 		char *ip = strsep(&cmd, ";");
 		char *cmdNumber = strsep(&cmd, ";");
@@ -186,16 +188,19 @@ int child_server(int *fd){
 			keep_first_command(cmd);
 			remove_leading_spaces(&cmd);
 			remove_trailing_spaces(&cmd);
+
 			
 			// Command empty (in case client side allows that)
 			if (!*cmd){
 				partNum++;
 				sprintf(result, "%d;%d;%d;%s;%s;%s", strlen(cmdNumber), 2, 0, cmdNumber, "1f", "");
 			}else{
+				
 				memcpy(cmdTmp, cmd, MAX_CMD_PLUS_HEADER*sizeof(char));
 				char *firstCmd = strsep(&cmdTmp, " ");
 				to_lowercase(&firstCmd);
 				
+
 				// First command invalid
 				if (strcmp(firstCmd, LS_CMD) != 0 
 					&& strcmp(firstCmd, CAT_CMD) != 0 
@@ -206,7 +211,12 @@ int child_server(int *fd){
 					partNum++;
 					sprintf(result, "%d;%d;%d;%s;%s;%s", strlen(cmdNumber), 2, 0, cmdNumber, "1f", "");
 				}else{ // command acceptable, proceed with popen
-					remove_invalid_pipe_commands(cmd);
+
+					remove_invalid_pipe_commands(&cmd);
+
+					// printf("cmd: '%s'\n", cmd);
+					// fflush(stdout);
+
 
 					// ignore stderr
 					sprintf(cmd+strlen(cmd), " 2>/dev/null");
@@ -252,6 +262,9 @@ int child_server(int *fd){
 				}
 			}
 		}
+		
+		// printf("result: '%s'\n", result);
+		// fflush(stdout);
 		send_result_with_UDP(port, ip, result, partNum, cmdNumber);
 
 		// let child die if parent dies unexpectedly, 1 -> init process
@@ -285,8 +298,8 @@ void send_result_with_UDP(char *port, char *ip, char *result, size_t packetNum, 
 	unsigned int serverlen = sizeof(server);
 	struct sockaddr *serverPtr = (struct sockaddr *) &server;
 	struct sockaddr *clientPtr = (struct sockaddr *) &client;
-	char msg[strlen(port) + strlen(cmdNumber) + count_digits(packetNum) + 7]; // port;cmdNumber;partNum;ACK
-	char expectedMsg[strlen(port) + strlen(cmdNumber) + count_digits(packetNum) + 7];
+	char msg[strlen(port) + strlen(cmdNumber) + count_digits(packetNum)+1 + 7]; // port;cmdNumber;partNum;ACK
+	char expectedMsg[strlen(port) + strlen(cmdNumber) + count_digits(packetNum)+1 + 7];
 
 	/* Create socket */
 	if ((sock = socket(AF_INET , SOCK_DGRAM , 0)) < 0){
@@ -319,7 +332,8 @@ void send_result_with_UDP(char *port, char *ip, char *result, size_t packetNum, 
 			// printf("Sending: %s with length: %d", result+i*(MAX_MSG+1), strlen(result+i*(MAX_MSG+1))+1);
 			// fflush(stdout);
 			/* Send message */
-			if (recvfrom(sock, msg, strlen(port) + strlen(cmdNumber) + count_digits(packetNum) + 7, 0, serverPtr, &serverlen) < 0) {
+
+			if (recvfrom(sock, msg, strlen(port) + strlen(cmdNumber) + count_digits(packetNum)+1 + 7, 0, serverPtr, &serverlen) < 0) {
 				perror_exit("recvfrom");
 			}
 			if (i+1 == packetNum){
@@ -327,63 +341,68 @@ void send_result_with_UDP(char *port, char *ip, char *result, size_t packetNum, 
 			}else{
 				sprintf(expectedMsg, "%s;%s;%d;ACK", port, cmdNumber, i+1);
 			}
-			
 
 			printf("msg: '%s', expectedMsg: '%s'\n", msg, expectedMsg);
 			fflush(stdout);
-
-			// if (){
-			// 	if (sendto(sock, msg, strlen(msg), 0, serverPtr, serverlen) < 0) {
-			// 		perror_exit("sendto");
-			// 	}
-			// 	break;
-			// }
-		}while(strcmp(msg, expectedMsg));
+			
+		}while(strcmp(msg, expectedMsg) != 0);
 	}
 	close(sock);
 }
 
-void remove_invalid_pipe_commands(char *cmd){
+void remove_invalid_pipe_commands(char **cmd){
 	replace_unquoted_pipes_with_newline(cmd);
-	char * const initialPtr = strsep(&cmd, "\n"); //first command already checked
-	char *firstCmd = strsep(&cmd, "\n");
-	char name[4];
+	if ((strstr(*cmd, "\n") == NULL)){
+		return; // no pipes to check
+	}
+	char * const initialPtr = strsep(cmd, "\n"); //first command already checked
+	char *firstCmd = strsep(cmd, "\n");
+	char *name = malloc(5*sizeof(char));
+	name[4] = '\0';
 
 	while(firstCmd != NULL){
 		char *tmpPtr = firstCmd;
+		// printf("tmpPtr: %s\n", tmpPtr);
 
 		while(*tmpPtr == ' '){
 			tmpPtr++;
 		}
+		// printf("tmpPtr: %s\n", tmpPtr);
 
-		strncpy(name, tmpPtr, 3);
+		strncpy(name, tmpPtr, 4);
+		// printf("%c", name[0]);
+		// name[0] = tmpPtr[0];
+		// name[1] = tmpPtr[1];
+		// name[2] = tmpPtr[2];
+		// name[3] = '\0';
 		to_lowercase(&name);
 		if (strcmp(name, LS_CMD) != 0 
 			&& strcmp(name, CAT_CMD) != 0 
 			&& strcmp(name, CUT_CMD) != 0 
 			&& strcmp(name, GREP_CMD) != 0 
 			&& strcmp(name, TR_CMD)!= 0){
-				cmd = initialPtr;
-				return;
+				(*cmd) = initialPtr;
+				break;
 		}
 
 		*(firstCmd-1)='|';
-		firstCmd = strsep(&cmd, "\n");
+		firstCmd = strsep(cmd, "\n");
 	}
+	free(name);
 }
 
-void replace_unquoted_pipes_with_newline(char *cmd){
+void replace_unquoted_pipes_with_newline(char **cmd){
 	int dQuoteOpen = 0;
 	int sQuoteOpen = 0;
-	for(int i = 0; cmd[i]; i++){
-		if (cmd[i] == '|' && dQuoteOpen == 0 && sQuoteOpen == 0){
-			cmd[i] = '\n';
+	for(int i = 0; (*cmd)[i]; i++){
+		if ((*cmd)[i] == '|' && dQuoteOpen == 0 && sQuoteOpen == 0){
+			(*cmd)[i] = '\n';
 		}
 
-		if (cmd[i] == '\"' && cmd[i-1] != '\\' && sQuoteOpen == 0)
+		if ((*cmd)[i] == '\"' && (*cmd)[i-1] != '\\' && sQuoteOpen == 0)
 			dQuoteOpen = (dQuoteOpen+1)%2;
 
-		if (cmd[i] == '\'' && cmd[i-1] != '\\' && dQuoteOpen == 0)
+		if ((*cmd)[i] == '\'' && (*cmd)[i-1] != '\\' && dQuoteOpen == 0)
 			sQuoteOpen = (sQuoteOpen+1)%2;
 	}
 }
@@ -479,7 +498,7 @@ pid_t *create_children(int childrenTotal){
     for(int j=0;j<childrenTotal;j++) {
 		pid[j] = fork();
         if(pid[j] == 0) { 
-            printf("[child] pid %d from [parent] pid %d\n",getpid(),getppid());
+            // printf("[child] pid %d from [parent] pid %d\n",getpid(),getppid());
             break;
         }else if(pid[j] < 0){
             perror_exit("fork");

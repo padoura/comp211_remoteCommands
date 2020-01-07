@@ -143,10 +143,10 @@ void receive_results(uint16_t clientPort, size_t cmdTotal){
             atoi(cmdNumber) <= cmdTotal
         ){
             //prepare ACK
-            char msg[count_digits(clientPort) + strlen(cmdNumber) + count_digits(partNum) + 7]; // port;cmdNumber;partNum;ACK
+            char msg[count_digits(clientPort) + strlen(cmdNumber) + strlen(partNum) + 7]; // port;cmdNumber;partNum;ACK
             sprintf(msg, "%u;%s;%s;ACK", clientPort, cmdNumber, partNum);
 
-            if (sendto(sock, msg, count_digits(clientPort) + strlen(cmdNumber) + count_digits(partNum) + 7, 0, serverPtr, serverlen)<0)
+            if (sendto(sock, msg, count_digits(clientPort) + strlen(cmdNumber) + strlen(partNum) + 7, 0, serverPtr, serverlen)<0)
                 perror_exit("sendto");
             
             //write result to appropriate file

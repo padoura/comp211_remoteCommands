@@ -173,17 +173,16 @@ int child_server(int *fd){
 		char *port = strsep(&cmd, ";");
 		char *ip = strsep(&cmd, ";");
 		char *cmdNumber = strsep(&cmd, ";");
-		unsigned int resultNum;
 
 		/* adding headers
 		The transferred message has the form:
-		cmdNumLen;partNumLen;cmdResultLen;cmdNumber;partNum;cmdResult
+		cmdNumber;partNum;cmdResult
 		*/
 
 		// Command too large
 		if (strlen(cmd) > MAX_CMD){
 			partNum++;
-			sprintf(result, "%d;%d;%d;%s;%s;%s", strlen(cmdNumber), 2, 0, cmdNumber, "1f", "");
+			sprintf(result, "%s;%s;%s", cmdNumber, "1f", "");
 		}else{
 			keep_first_command(cmd);
 			remove_leading_spaces(&cmd);
@@ -193,7 +192,7 @@ int child_server(int *fd){
 			// Command empty (in case client side allows that)
 			if (!*cmd){
 				partNum++;
-				sprintf(result, "%d;%d;%d;%s;%s;%s", strlen(cmdNumber), 2, 0, cmdNumber, "1f", "");
+				sprintf(result, "%s;%s;%s", cmdNumber, "1f", "");
 			}else{
 				
 				memcpy(cmdTmp, cmd, MAX_CMD_PLUS_HEADER*sizeof(char));
@@ -209,7 +208,7 @@ int child_server(int *fd){
 					&& strcmp(firstCmd, TR_CMD)!= 0)
 				{
 					partNum++;
-					sprintf(result, "%d;%d;%d;%s;%s;%s", strlen(cmdNumber), 2, 0, cmdNumber, "1f", "");
+					sprintf(result, "%s;%s;%s", cmdNumber, "1f", "");
 				}else{ // command acceptable, proceed with popen
 
 					remove_invalid_pipe_commands(&cmd);
@@ -226,35 +225,33 @@ int child_server(int *fd){
 						perror_exit("popen");
 					}
 					/* build result in null-separated MAX_MSG-sized packets */
-					size_t iterSize = MAX_MSG - 3 - 2 - 3 - strlen(cmdNumber) - count_digits(strlen(cmdNumber)); // delimiters (3), partNum (2), strlen(buffer) (3)
+					size_t iterSize = MAX_MSG - 2 - 2 - 3 - strlen(cmdNumber); // delimiters (2), partNum (2), strlen(buffer) (3)
 					char nextBuffer[iterSize+1];
 					char buffer[iterSize+1];
-					char *fgetsRes = fgets(nextBuffer, iterSize, pipe_fp);
+					size_t fgetsRes = fread(nextBuffer, sizeof(char), iterSize, pipe_fp);
 					while(1) {
-						if (fgetsRes != NULL){
+						nextBuffer[fgetsRes] = '\0'; // secure null termination
+						if (fgetsRes == iterSize){
 							sprintf(buffer,"%s",nextBuffer);
 							partNum++;
-							sprintf(resultPtr, "%d;%d;%d;%s;%d;%s", strlen(cmdNumber), count_digits(partNum), strlen(buffer), cmdNumber, partNum, buffer);
+							sprintf(resultPtr, "%s;%d;%s", cmdNumber, partNum, buffer);
 							if (partNum*(MAX_MSG + 1) == initSize){
 								result = realloc(result, sizeof(char)*(initSize += MAX_MSG+1));
 							}
 							resultPtr = result + partNum*(MAX_MSG + 1); // each part of message has MAX_MSG characters + null termination
 							// digits increased for storing partNum
+							// printf("%s;%s;%s;%d\n",port, ip, cmdNumber, partNum);
 							if (count_digits(partNum) != count_digits(partNum-1)){
 								iterSize -= 1;
-								if (count_digits(partNum) == 9 || count_digits(partNum) == 99 || count_digits(partNum) == 999){ 
-									// larger cases should be timed out anyway
-									iterSize -= 1;
-								}
 							}
-							fgetsRes = fgets(nextBuffer, iterSize, pipe_fp);
+							fgetsRes = fread(nextBuffer, sizeof(char), iterSize, pipe_fp);
 						}else if (partNum > 0){ // finish flag
 							resultPtr = resultPtr - (MAX_MSG + 1);
-							sprintf(resultPtr, "%d;%d;%d;%s;%d%c;%s", strlen(cmdNumber),  count_digits(partNum)+1, strlen(buffer), cmdNumber, partNum, 'f', buffer);
+							sprintf(resultPtr, "%s;%d%c;%s", cmdNumber, partNum, 'f', nextBuffer);
 							break;
 						}else{
 							partNum++;
-							sprintf(result, "%d;%d;%d;%s;%s;%s", strlen(cmdNumber), 2, 0, cmdNumber, "1f", "");
+							sprintf(result, "%s;%s;%s", cmdNumber, "1f", nextBuffer);
 							break;
 						}
 					}
@@ -265,6 +262,7 @@ int child_server(int *fd){
 		
 		// printf("result: '%s'\n", result);
 		// fflush(stdout);
+		// printf("%s;%s;%s;%d\n",port, ip, cmdNumber, partNum);
 		send_result_with_UDP(port, ip, result, partNum, cmdNumber);
 
 		// let child die if parent dies unexpectedly, 1 -> init process
@@ -298,8 +296,6 @@ void send_result_with_UDP(char *port, char *ip, char *result, size_t packetNum, 
 	unsigned int serverlen = sizeof(server);
 	struct sockaddr *serverPtr = (struct sockaddr *) &server;
 	struct sockaddr *clientPtr = (struct sockaddr *) &client;
-	char msg[strlen(port) + strlen(cmdNumber) + count_digits(packetNum)+1 + 7]; // port;cmdNumber;partNum;ACK
-	char expectedMsg[strlen(port) + strlen(cmdNumber) + count_digits(packetNum)+1 + 7];
 
 	/* Create socket */
 	if ((sock = socket(AF_INET , SOCK_DGRAM , 0)) < 0){
@@ -325,27 +321,9 @@ void send_result_with_UDP(char *port, char *ip, char *result, size_t packetNum, 
 	}
 
 	for (int i=0;i<packetNum;i++){
-		do{
-			if (sendto(sock, result+i*(MAX_MSG+1), strlen(result+i*(MAX_MSG+1))+1, 0, serverPtr, serverlen) < 0) {
-				perror_exit("sendto");
-			}
-			// printf("Sending: %s with length: %d", result+i*(MAX_MSG+1), strlen(result+i*(MAX_MSG+1))+1);
-			// fflush(stdout);
-			/* Send message */
-
-			if (recvfrom(sock, msg, strlen(port) + strlen(cmdNumber) + count_digits(packetNum)+1 + 7, 0, serverPtr, &serverlen) < 0) {
-				perror_exit("recvfrom");
-			}
-			if (i+1 == packetNum){
-				sprintf(expectedMsg, "%s;%s;%d%c;ACK", port, cmdNumber, i+1, 'f');
-			}else{
-				sprintf(expectedMsg, "%s;%s;%d;ACK", port, cmdNumber, i+1);
-			}
-
-			printf("msg: '%s', expectedMsg: '%s'\n", msg, expectedMsg);
-			fflush(stdout);
-			
-		}while(strcmp(msg, expectedMsg) != 0);
+		if (sendto(sock, result+i*(MAX_MSG+1), MAX_MSG, 0, serverPtr, serverlen) < 0) {
+			perror_exit("sendto");
+		}
 	}
 	close(sock);
 }

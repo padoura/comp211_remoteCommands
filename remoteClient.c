@@ -17,6 +17,7 @@ void receive_results(uint16_t clientPort, size_t cmdTotal);
 int make_socket(uint16_t port);
 size_t count_lines(FILE *fp);
 size_t count_digits(size_t n);
+void merge_files(uint16_t clientPort, size_t cmdTotal, int *partsPerResult);
 
 void main(int argc, char *argv[])
 {
@@ -106,6 +107,8 @@ void receive_results(uint16_t clientPort, size_t cmdTotal){
     // strings for checking progress
     char resultReceived[cmdTotal+1];
     char expectedResultReceived[cmdTotal+1];
+    int partsPerResult[cmdTotal];
+
     for (int i = 0; i < cmdTotal; i++){
         resultReceived[i] = '0';
     }
@@ -121,49 +124,93 @@ void receive_results(uint16_t clientPort, size_t cmdTotal){
         // printf("%d\n", strcmp(resultReceived, expectedResultReceived) != 0);
         serverlen = sizeof(server);
         /* Receive message */
-        if ((recvfrom(sock, buf, MAX_MSG+1, 0, serverPtr, &serverlen)) < 0)
+        if ((recvfrom(sock, buf, MAX_MSG, 0, serverPtr, &serverlen)) < 0)
             perror_exit("recvfrom");
         
         // parsing result with expected format
-        int cmdNumLen = atoi(strsep(&buf, ";"));
-        int partNumLen = atoi(strsep(&buf, ";"));
-        int cmdResultLen = atoi(strsep(&buf, ";"));
         char *cmdNumber = strsep(&buf, ";");
         char *partNum = strsep(&buf, ";");
+
         char *cmdResult = buf;
         buf = initBuf;
 
-        // printf("%d;%d;%d;%s;%s;%s\n", cmdNumLen, partNumLen, cmdResultLen, cmdNumber, partNum, cmdResult); /* Send message */
-        // printf("%d;%d;%d;%d;%d\n", cmdNumLen == strlen(cmdNumber), partNumLen == strlen(partNum), cmdResultLen == strlen(cmdResult), atoi(cmdNumber) > 0, atoi(cmdNumber) <= cmdTotal); /* Send message */
+        char filename[16 + count_digits(clientPort) + strlen(cmdNumber) + strlen(partNum)]; //output.receive{clientPort}.{cmdNumber}.{partNum}
+        sprintf(filename, "output.receive%u.%s.%s", clientPort, cmdNumber, partNum);
 
-        if (cmdNumLen == strlen(cmdNumber) &&
-            partNumLen == strlen(partNum) &&
-            cmdResultLen == strlen(cmdResult) &&
-            atoi(cmdNumber) > 0 &&
-            atoi(cmdNumber) <= cmdTotal
-        ){
-            //prepare ACK
-            char msg[count_digits(clientPort) + strlen(cmdNumber) + strlen(partNum) + 7]; // port;cmdNumber;partNum;ACK
-            sprintf(msg, "%u;%s;%s;ACK", clientPort, cmdNumber, partNum);
+        //truncate existing file
+        FILE *fp;
+        fp = fopen(filename, "w");
+        fclose(fp);
 
-            if (sendto(sock, msg, count_digits(clientPort) + strlen(cmdNumber) + strlen(partNum) + 7, 0, serverPtr, serverlen)<0)
-                perror_exit("sendto");
-            
-            //write result to appropriate file
-            FILE *fp;
-            char filename[15 + count_digits(clientPort) + strlen(cmdNumber)]; //output.receive{clientPort}.{cmdNumber}
-            sprintf(filename, "output.receive%u.%s", clientPort, cmdNumber);
-            fp = fopen(filename, "a");
-            fprintf(fp, cmdResult);
-            fclose(fp);
+        //write result to appropriate file
+        fp = fopen(filename, "a");
+        fprintf(fp, cmdResult);
+        fclose(fp);
 
-            if ((strstr(partNum, "f") != NULL)){
-                *(resultReceived+atoi(cmdNumber)-1) = '1';
-            }
+        if ((strstr(partNum, "f") != NULL)){
+            *(resultReceived+atoi(cmdNumber)-1) = '1';
+            partsPerResult[atoi(cmdNumber)-1] = atoi(strsep(&partNum, "f"));
         }
     }
     close(sock);
     free(buf);
+
+    merge_files(clientPort, cmdTotal, partsPerResult);
+}
+
+void merge_files(uint16_t clientPort, size_t cmdTotal, int *partsPerResult){
+
+    for (int fiter=0;fiter<cmdTotal;fiter++){
+        char filename[15 + count_digits(clientPort) + count_digits(fiter)]; //output.receive{clientPort}.{cmdNumber}
+        sprintf(filename, "output.receive%u.%d", clientPort, fiter+1);
+        FILE* fp = fopen(filename, "wb");
+
+        if (fp == NULL)
+            continue;
+
+        char buffer[4097];
+
+        FILE* fp_read;
+        for (int i=0; i<partsPerResult[fiter]; i++) {
+
+            if (i == partsPerResult[fiter]-1){
+                char fname[16 + count_digits(clientPort) + count_digits(fiter) + count_digits(partsPerResult[fiter]) + 1]; //output.receive{clientPort}.{cmdNumber}.{partNum}
+                sprintf(fname, "output.receive%u.%d.%d%c", clientPort, fiter+1, i+1, 'f');
+                fp_read = fopen(fname, "rb");
+                if (fp_read == NULL) 
+                    continue;
+
+                size_t n, k;
+                while ((n = fread(buffer, sizeof(char), 4096, fp_read))) {
+                    size_t k = fwrite(buffer, sizeof(char), n, fp);
+                    if (!k)
+                        continue;
+                }
+                
+                fclose(fp_read);
+                remove(fname);
+            }else{
+                char fname[16 + count_digits(clientPort) + count_digits(fiter) + count_digits(partsPerResult[fiter])]; //output.receive{clientPort}.{cmdNumber}.{partNum}
+                sprintf(fname, "output.receive%u.%d.%d", clientPort, fiter+1, i+1);
+                fp_read = fopen(fname, "rb");
+                if (fp_read == NULL) 
+                    continue;
+
+                size_t n, k;
+                while ((n = fread(buffer, sizeof(char), 4096, fp_read))) {
+                    size_t k = fwrite(buffer, sizeof(char), n, fp);
+                    if (!k)
+                        continue;
+                }
+                
+                fclose(fp_read);
+                remove(fname);
+            }
+
+        }
+
+        fclose(fp);
+    }
 }
 
 size_t count_digits(size_t n){

@@ -39,22 +39,6 @@ void main(int argc, char *argv[])
     clientPort = atoi(argv[3]);
     char *inputFile  = strdup(argv[4]);
     
-    /* Create socket */
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-        perror_exit("socket");
-    /* Find server address */
-    if ((rem = gethostbyname(serverName)) == NULL){
-        perror_exit("gethostbyname");
-    }
-    
-    server.sin_family = AF_INET; /* Internet domain */
-    memcpy(&server.sin_addr, rem->h_addr, rem->h_length);
-    server.sin_port = htons(serverPort); /* Server port */
-
-    /* Initiate connection */
-    if (connect(sock, serverptr, sizeof(server)) < 0)
-        perror_exit("connect");
-    // printf("Connecting to %s port %d\n", serverName, serverPort);
 
     FILE *fp;
     fp = fopen(inputFile, "r");
@@ -68,8 +52,27 @@ void main(int argc, char *argv[])
     pid_t *pid = create_children(1);
 
 	if (getpid() == ppid){
+        /* Create socket */
+        if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+            perror_exit("socket");
+        /* Find server address */
+        if ((rem = gethostbyname(serverName)) == NULL){
+            perror_exit("gethostbyname");
+        }
+        
+        server.sin_family = AF_INET; /* Internet domain */
+        memcpy(&server.sin_addr, rem->h_addr, rem->h_length);
+        server.sin_port = htons(serverPort); /* Server port */
+
+        /* Initiate connection */
+        if (connect(sock, serverptr, sizeof(server)) < 0)
+            perror_exit("connect");
+        // printf("Connecting to %s port %d\n", serverName, serverPort);
+
 		send_commands(sock, fp, clientPort);
-        while (wait(&childStatus) > 0); // waiting for all children to exit first
+        while (
+            wait(&childStatus) > 0
+        ); // waiting for all children to exit first
 	}
 	else{
 		receive_results(clientPort, cmdTotal);
@@ -115,16 +118,11 @@ void receive_results(uint16_t clientPort, size_t cmdTotal){
     sock = make_socket(clientPort);
 
     while(strcmp(resultReceived, expectedResultReceived) != 0) {
+        // printf("%d\n", strcmp(resultReceived, expectedResultReceived) != 0);
         serverlen = sizeof(server);
         /* Receive message */
-        if ((recvfrom(sock, buf, sizeof(buf), 0, serverPtr, &serverlen)) < 0)
+        if ((recvfrom(sock, buf, MAX_MSG+1, 0, serverPtr, &serverlen)) < 0)
             perror_exit("recvfrom");
-
-        printf("%s", buf);
-        fflush(stdout);
-        buf[sizeof(buf)-1]='\0'; /* force str termination */
-
-        // printf("%s\n", cmdResult); /* Send message */
         
         // parsing result with expected format
         int cmdNumLen = atoi(strsep(&buf, ";"));
@@ -135,7 +133,8 @@ void receive_results(uint16_t clientPort, size_t cmdTotal){
         char *cmdResult = buf;
         buf = initBuf;
 
-
+        // printf("%d;%d;%d;%s;%s;%s\n", cmdNumLen, partNumLen, cmdResultLen, cmdNumber, partNum, cmdResult); /* Send message */
+        // printf("%d;%d;%d;%d;%d\n", cmdNumLen == strlen(cmdNumber), partNumLen == strlen(partNum), cmdResultLen == strlen(cmdResult), atoi(cmdNumber) > 0, atoi(cmdNumber) <= cmdTotal); /* Send message */
 
         if (cmdNumLen == strlen(cmdNumber) &&
             partNumLen == strlen(partNum) &&
@@ -144,9 +143,10 @@ void receive_results(uint16_t clientPort, size_t cmdTotal){
             atoi(cmdNumber) <= cmdTotal
         ){
             //prepare ACK
-            char msg[count_digits(clientPort) + strlen(cmdNumber) + count_digits(partNum) + 6]; // port;cmdNumber;partNum;ACK
-            sprintf(msg, "%s;%s;%d;ACK", clientPort, cmdNumber, partNum);
-            if (sendto(sock, msg, sizeof(msg), 0, serverPtr, serverlen)<0)
+            char msg[count_digits(clientPort) + strlen(cmdNumber) + count_digits(partNum) + 7]; // port;cmdNumber;partNum;ACK
+            sprintf(msg, "%u;%s;%s;ACK", clientPort, cmdNumber, partNum);
+
+            if (sendto(sock, msg, count_digits(clientPort) + strlen(cmdNumber) + count_digits(partNum) + 7, 0, serverPtr, serverlen)<0)
                 perror_exit("sendto");
             
             //write result to appropriate file
@@ -162,7 +162,6 @@ void receive_results(uint16_t clientPort, size_t cmdTotal){
             }
         }
     }
-
     close(sock);
     free(buf);
 }
@@ -190,29 +189,15 @@ int make_socket(uint16_t port){
     server.sin_addr.s_addr = htonl(INADDR_ANY);
     server.sin_port = htons(port);
     serverlen = sizeof(server);
+
+      
+    if (bind(sock, serverPtr, serverlen) < 0)
+        perror_exit("bind");
     
     /* Discover selected port */
     if (getsockname(sock, serverPtr, &serverlen) < 0)
         perror_exit("getsockname");
     // printf("Socket port: %d\n", ntohs(server.sin_port));
-
-	// Allow reuse of socket before bind when server quits
-    int option = 1;
-    int optLen = sizeof(option);
-    if(
-        setsockopt(sock,SOL_SOCKET,SO_REUSEPORT,&option,optLen) < 0 ||
-        setsockopt(sock,SOL_SOCKET,SO_REUSEADDR,&option,optLen) < 0
-    )
-    {
-        close(sock);
-        perror_exit("setsockopt");
-    }
-
-	if (bind(sock, serverPtr, serverlen) < 0) {
-        perror_exit("bind");
-	}
-
-
     return sock;
 }
 

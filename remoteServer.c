@@ -52,7 +52,6 @@ size_t count_digits(size_t n);
 
 int main(int argc, char *argv[])
 {
-	extern int make_socket(uint16_t port);
 	int sock, childrenTotal;
     uint16_t port;
 	fd_set active_fd_set, read_fd_set;
@@ -119,7 +118,7 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 		/* Service all the sockets with input pending. */
 		for (i = 0; i < FD_SETSIZE; ++i)
 			if (FD_ISSET(i, &read_fd_set)) {
-				printf("adding fd: %d\n", i);
+				// printf("adding fd: %d\n", i);
 				if (i == sock) {
 					/* Connection request on original socket. */
 					int new;
@@ -133,7 +132,7 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 						ntohs(clientname.sin_port));
 					FD_SET(new, &active_fd_set);
 				} else {
-					printf("same fd: %d, sock: %d\n", i, sock);
+					// printf("same fd: %d, sock: %d\n", i, sock);
 					struct InputCommand *Command = read_from_client(i, active_fd_set);
 					// for (int i=0; i<Command->numCommand; i++){
 						// printf("cmd: '%s', port '%d'\n", *(Command->command), Command->clientport);
@@ -283,11 +282,11 @@ void send_result_with_UDP(char *port, char *ip, char *result, size_t packetNum, 
 	int sock;
 	struct hostent *rem;
 	struct sockaddr_in server, client;
-	unsigned int serverlen = sizeof(server); 
+	unsigned int serverlen = sizeof(server);
 	struct sockaddr *serverPtr = (struct sockaddr *) &server;
 	struct sockaddr *clientPtr = (struct sockaddr *) &client;
-	char msg[strlen(port) + strlen(cmdNumber) + count_digits(packetNum) + 6]; // port;cmdNumber;partNum;ACK
-	char expectedMsg[strlen(port) + strlen(cmdNumber) + count_digits(packetNum) + 6];
+	char msg[strlen(port) + strlen(cmdNumber) + count_digits(packetNum) + 7]; // port;cmdNumber;partNum;ACK
+	char expectedMsg[strlen(port) + strlen(cmdNumber) + count_digits(packetNum) + 7];
 
 	/* Create socket */
 	if ((sock = socket(AF_INET , SOCK_DGRAM , 0)) < 0){
@@ -317,11 +316,22 @@ void send_result_with_UDP(char *port, char *ip, char *result, size_t packetNum, 
 			if (sendto(sock, result+i*(MAX_MSG+1), strlen(result+i*(MAX_MSG+1))+1, 0, serverPtr, serverlen) < 0) {
 				perror_exit("sendto");
 			}
+			// printf("Sending: %s with length: %d", result+i*(MAX_MSG+1), strlen(result+i*(MAX_MSG+1))+1);
+			// fflush(stdout);
 			/* Send message */
-			if (recvfrom(sock, msg, strlen(msg), 0, serverPtr, &serverlen) < 0) {
+			if (recvfrom(sock, msg, strlen(port) + strlen(cmdNumber) + count_digits(packetNum) + 7, 0, serverPtr, &serverlen) < 0) {
 				perror_exit("recvfrom");
 			}
-			sprintf(expectedMsg, "%s;%s;%d;ACK", port, cmdNumber, i+1);
+			if (i+1 == packetNum){
+				sprintf(expectedMsg, "%s;%s;%d%c;ACK", port, cmdNumber, i+1, 'f');
+			}else{
+				sprintf(expectedMsg, "%s;%s;%d;ACK", port, cmdNumber, i+1);
+			}
+			
+
+			printf("msg: '%s', expectedMsg: '%s'\n", msg, expectedMsg);
+			fflush(stdout);
+
 			// if (){
 			// 	if (sendto(sock, msg, strlen(msg), 0, serverPtr, serverlen) < 0) {
 			// 		perror_exit("sendto");
@@ -422,10 +432,10 @@ void allocate_to_children(struct InputCommand *Command, int *fd, struct sockaddr
 	// int maxWrapperSize = MAX_CMD+50; 
 	char cmdbuf[MAX_CMD_PLUS_HEADER];
 	snprintf(cmdbuf, MAX_CMD_PLUS_HEADER-1, "%d;%s;%d;%s", Command->clientport, inet_ntoa(clientname.sin_addr), Command->cmdNumber, Command->command);
-	// printf("'%s'\n", cmdbuf);
 	if (write(fd[1], cmdbuf, MAX_CMD_PLUS_HEADER-1) == -1){
 		perror_exit("write of allocate_to_children");
 	}
+	// printf("'%s'\n", cmdbuf);
 	free(Command->initialPtr);
 	free(Command);
 }
@@ -482,10 +492,10 @@ struct InputCommand *read_from_client(int fileDes, fd_set active_fd_set){
 	char buf[1];
 	size_t len = 0;
 	size_t initSize = 119; // based on client's msg size
-	int readResult;
+	ssize_t readResult;
 	struct InputCommand *Command = malloc(sizeof(struct InputCommand));
 	Command->command = realloc(NULL, sizeof(char)*initSize);
-	printf("Socket %d sent command:\n", fileDes);
+	// printf("Socket %d sent command:\n", fileDes);
     while ((readResult = read(fileDes, buf, 1) > 0) && buf[0] != '\n'){/* Receive 1 char */
 		Command->command[len++]=buf[0];
         if(len==initSize){

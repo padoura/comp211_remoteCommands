@@ -6,8 +6,10 @@
 #include <netdb.h>        /* ge th os tb ya dd r */
 #include <stdlib.h>       /* exit */
 #include <string.h>       /* strlen */
+#include <errno.h>       /* errno */
 
 #define MAX_MSG 512
+extern int errno;
 
 void perror_exit(char *message);
 void send_commands(int sock, FILE *fp, int clientPort);
@@ -18,6 +20,7 @@ int make_socket(uint16_t port);
 size_t count_lines(FILE *fp);
 size_t count_digits(size_t n);
 void merge_files(uint16_t clientPort, size_t cmdTotal, int *partsPerResult);
+
 
 void main(int argc, char *argv[])
 {
@@ -119,13 +122,18 @@ void receive_results(uint16_t clientPort, size_t cmdTotal){
     expectedResultReceived[cmdTotal] = '\0';
 
     sock = make_socket(clientPort);
+    int dcout = 0;
 
     while(strcmp(resultReceived, expectedResultReceived) != 0) {
-        // printf("%d\n", strcmp(resultReceived, expectedResultReceived) != 0);
+        // printf("resultReceived: '%s' vs expectedResultReceived '%s'\n", resultReceived, expectedResultReceived);
         serverlen = sizeof(server);
         /* Receive message */
-        if ((recvfrom(sock, buf, MAX_MSG, 0, serverPtr, &serverlen)) < 0)
+        if ((recvfrom(sock, buf, MAX_MSG, 0, serverPtr, &serverlen)) < 0){
+            if (errno == EAGAIN || errno == EWOULDBLOCK){ // end thread if timeout occurs
+                break;
+            }
             perror_exit("recvfrom");
+        }
         
         // parsing result with expected format
         char *cmdNumber = strsep(&buf, ";");
@@ -136,6 +144,7 @@ void receive_results(uint16_t clientPort, size_t cmdTotal){
 
         char filename[16 + count_digits(clientPort) + strlen(cmdNumber) + strlen(partNum)]; //output.receive{clientPort}.{cmdNumber}.{partNum}
         sprintf(filename, "output.receive%u.%s.%s", clientPort, cmdNumber, partNum);
+        // printf("%s\n", filename);
 
         //truncate existing file
         FILE *fp;
@@ -181,10 +190,8 @@ void merge_files(uint16_t clientPort, size_t cmdTotal, int *partsPerResult){
                     continue;
 
                 size_t n, k;
-                while ((n = fread(buffer, sizeof(char), 4096, fp_read))) {
-                    size_t k = fwrite(buffer, sizeof(char), n, fp);
-                    if (!k)
-                        continue;
+                while ((n = fread(buffer, sizeof(char), 4096, fp_read))>0) {
+                    fwrite(buffer, sizeof(char), n, fp);
                 }
                 
                 fclose(fp_read);
@@ -197,10 +204,8 @@ void merge_files(uint16_t clientPort, size_t cmdTotal, int *partsPerResult){
                     continue;
 
                 size_t n, k;
-                while ((n = fread(buffer, sizeof(char), 4096, fp_read))) {
-                    size_t k = fwrite(buffer, sizeof(char), n, fp);
-                    if (!k)
-                        continue;
+                while ((n = fread(buffer, sizeof(char), 4096, fp_read))>0) {
+                    fwrite(buffer, sizeof(char), n, fp);
                 }
                 
                 fclose(fp_read);
@@ -236,6 +241,11 @@ int make_socket(uint16_t port){
     server.sin_addr.s_addr = htonl(INADDR_ANY);
     server.sin_port = htons(port);
     serverlen = sizeof(server);
+
+    struct timeval tv;
+    tv.tv_sec = 10;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
 
       
     if (bind(sock, serverPtr, serverlen) < 0)

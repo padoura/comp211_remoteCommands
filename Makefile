@@ -3,7 +3,7 @@ build:
 	gcc -w -o remoteClient remoteClient.c
 
 install: build
-	./remoteServer 9008 1
+	./remoteServer 9080 20
 
 clean:
 	rm -r ./output.receive*

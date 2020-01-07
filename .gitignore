@@ -56,3 +56,5 @@ dkms.conf
 /COMP211slides_11.pdf
 /COMP211slides_12.pdf
 /COMP211slides_13.pdf
+/nbproject
+/gdb-entitlement.xml

@@ -25,9 +25,9 @@
 
 struct InputCommand {
    char  *command;
-   uint16_t clientport;
+   char *clientport;
    int isCompleted;
-   int cmdNumber;
+   char *cmdNumber;
    char *initialPtr;
 };
 
@@ -54,7 +54,7 @@ int main(int argc, char *argv[])
 {
 	int sock, childrenTotal;
     uint16_t port;
-	fd_set active_fd_set, read_fd_set;
+	fd_set active_fd_set;
 	pid_t ppid = getpid();
 
     if (argc != 3){
@@ -65,7 +65,7 @@ int main(int argc, char *argv[])
     childrenTotal = atoi(argv[2]);
 
 	/* Ignore SIGPIPEs */
-    signal(SIGPIPE, SIG_IGN);
+    // signal(SIGPIPE, SIG_IGN);
 
 
 	/* Create the TCP socket and set it up to accept connections. */
@@ -155,9 +155,8 @@ int child_server(int *fd){
 	close(fd[1]);
 	char *cmd = malloc(MAX_CMD_PLUS_HEADER*sizeof(char));
 	char *cmdTmp = malloc(MAX_CMD_PLUS_HEADER*sizeof(char));
-	size_t initSize = MAX_MSG+1; // +1 for null termination between messages
-	char *result = realloc(NULL, 2*sizeof(char)*(initSize));
-	char *resultPtr = result;
+	size_t initSize = 2*(MAX_MSG+1); // +1 for null termination between messages
+	char *result = realloc(NULL, sizeof(char)*(initSize));
 	char * const initialCmd = cmd;
 	char * const initialCmdTmp = cmdTmp;
 
@@ -166,6 +165,7 @@ int child_server(int *fd){
 		cmd = initialCmd;
 		cmdTmp = initialCmdTmp;
 		size_t partNum = 0;
+		char *resultPtr = result;
 
 		read(fd[0], cmd, MAX_CMD_PLUS_HEADER-1);
 
@@ -173,6 +173,9 @@ int child_server(int *fd){
 		char *port = strsep(&cmd, ";");
 		char *ip = strsep(&cmd, ";");
 		char *cmdNumber = strsep(&cmd, ";");
+
+		// if (i+1 == 1){
+		// }
 
 		/* adding headers
 		The transferred message has the form:
@@ -211,6 +214,7 @@ int child_server(int *fd){
 					sprintf(result, "%s;%s;%s", cmdNumber, "1f", "");
 				}else{ // command acceptable, proceed with popen
 
+					// printf("%d -> %s\n", getpid(), cmdNumber);
 					remove_invalid_pipe_commands(&cmd);
 
 					// printf("cmd: '%s'\n", cmd);
@@ -231,7 +235,7 @@ int child_server(int *fd){
 					size_t fgetsRes = fread(nextBuffer, sizeof(char), iterSize, pipe_fp);
 					while(1) {
 						nextBuffer[fgetsRes] = '\0'; // secure null termination
-						if (fgetsRes == iterSize){
+						if (fgetsRes > 0){
 							sprintf(buffer,"%s",nextBuffer);
 							partNum++;
 							sprintf(resultPtr, "%s;%d;%s", cmdNumber, partNum, buffer);
@@ -321,6 +325,9 @@ void send_result_with_UDP(char *port, char *ip, char *result, size_t packetNum, 
 	}
 
 	for (int i=0;i<packetNum;i++){
+		// if (i+1 == 1){
+		// 	printf("%s with cmdNumber='%s'\n", result+i*(MAX_MSG+1), cmdNumber);
+		// }
 		if (sendto(sock, result+i*(MAX_MSG+1), MAX_MSG, 0, serverPtr, serverlen) < 0) {
 			perror_exit("sendto");
 		}
@@ -428,7 +435,7 @@ void to_lowercase(char** line){
 void allocate_to_children(struct InputCommand *Command, int *fd, struct sockaddr_in clientname){
 	// int maxWrapperSize = MAX_CMD+50; 
 	char cmdbuf[MAX_CMD_PLUS_HEADER];
-	snprintf(cmdbuf, MAX_CMD_PLUS_HEADER-1, "%d;%s;%d;%s", Command->clientport, inet_ntoa(clientname.sin_addr), Command->cmdNumber, Command->command);
+	snprintf(cmdbuf, MAX_CMD_PLUS_HEADER-1, "%s;%s;%s;%s", Command->clientport, inet_ntoa(clientname.sin_addr), Command->cmdNumber, Command->command);
 	if (write(fd[1], cmdbuf, MAX_CMD_PLUS_HEADER-1) == -1){
 		perror_exit("write of allocate_to_children");
 	}
@@ -504,8 +511,10 @@ struct InputCommand *read_from_client(int fileDes, fd_set active_fd_set){
 	// null termination
 	Command->command[len]='\0';
 
-	Command->cmdNumber = atoi(strsep(&Command->command, ";"));
-	Command->clientport = atoi(strsep(&Command->command, ";"));
+	Command->cmdNumber = strsep(&Command->command, ";");
+	Command->clientport = strsep(&Command->command, ";");
+	
+	// printf("'%s' as: '%d'\n", Command->command, Command->cmdNumber);
 	// client finish, close connection
 	if (readResult == 0){
 		Command->isCompleted = 1;

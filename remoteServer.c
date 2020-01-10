@@ -34,8 +34,8 @@ struct InputCommand {
 int make_socket(uint16_t port);
 int child_server(int *fd);
 void perror_exit(char *message);
-pid_t *create_children(int childrenTotal);
-void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid, int *fd);
+pid_t *create_children(int childrenTotal, int fd[][2]);
+void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid, int fd[][2]);
 struct InputCommand *read_from_client(int fileDes, fd_set active_fd_set);
 struct InputCommand *create_command_struct(char * command, size_t len);
 void allocate_to_children(struct InputCommand *Command, int *fd, struct sockaddr_in clientname);
@@ -48,6 +48,8 @@ void replace_unquoted_pipes_with_newline(char **cmd);
 void remove_invalid_pipe_commands(char **cmd);
 void send_result_with_UDP(char *port, char *ip, char *result, size_t packetNum, char *cmdNumber);
 size_t count_digits(size_t n);
+int *keep_one_child_per_pipe(pid_t *pid, int childrenTotal, int fd[][2]);
+int find_child_index(pid_t *pid, int childrenTotal);
 
 
 int main(int argc, char *argv[])
@@ -72,15 +74,20 @@ int main(int argc, char *argv[])
 	sock = make_socket(port);
 	
 
+	/* Initialize the set of reading file descriptors to be monitored by select */
+	FD_ZERO(&active_fd_set);
+	FD_SET(sock, &active_fd_set);
+
 	// initialize pipes
-	int fd[2];
-	// int fd[childrenTotal][2]; 
-	// for (int i=0;i<childrenTotal;i++){
-	if (pipe(fd)==-1){ 
-		perror_exit("pipe"); 
+	// int fd[2];
+	int fdall[childrenTotal][2]; 
+	for (int i=0;i<childrenTotal;i++){
+		if (pipe(fdall[i])==-1){ 
+			perror_exit("pipe"); 
+		}
+		FD_SET(fdall[i][0], &active_fd_set); // let select monitor reading ends
+		printf("pipe %d: r:%d w:%d\n", i+1, fdall[i][0],fdall[i][1]);
 	}
-	// printf("r:%dw:%d\n",fd[0],fd[1]);
-	// }
 
 
 	/* Listen for connections */
@@ -89,34 +96,71 @@ int main(int argc, char *argv[])
 	}
 	// printf("Listening for connections to port %d with total children processes: %d\n", port, childrenTotal);
 
-	/* Initialize the set of active sockets. */
-	FD_ZERO(&active_fd_set);
-	FD_SET(sock, &active_fd_set);
-
-	pid_t *pid = create_children(childrenTotal);
+	pid_t *pid = create_children(childrenTotal, fdall);
 
 	if (getpid() == ppid){
-		parent_server(childrenTotal, active_fd_set, sock, pid, fd);
+		parent_server(childrenTotal, active_fd_set, sock, pid, fdall);
 	}
 	else{
+		int *fd = keep_one_child_per_pipe(pid, childrenTotal, fdall);
 		child_server(fd);
 	}
 }
 
-void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid, int *fd){
+int find_child_index(pid_t *pid, int childrenTotal){
+	for (int j=0;j<childrenTotal;j++){
+		if (getpid() == pid[j]){
+			return j;
+		}
+	}
+	return -1;
+}
+
+int *keep_one_child_per_pipe(pid_t *pid, int childrenTotal, int fd[][2]){
+	int child = find_child_index(pid, childrenTotal);
+	for (int j=0;j<childrenTotal;j++){
+		if (child != j){
+			close(fd[j][0]);
+			close(fd[j][1]);
+		}
+	}
+	return fd[child];
+}
+
+void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid, int fd[][2]){
 	fd_set read_fd_set;
 	int i;
 	struct sockaddr_in clientname;
 	size_t size;
-	close(fd[0]); // close reading end
+
+	int maxReadPipeFd = find_max_read_pipe(fd, childrenTotal);
+	int isChildReady[childrenTotal];
+	char ready[1];
+
 	while (1) {
-		/* Block until input arrives on one or more active sockets. */
+		/* Block until input arrives */
 		read_fd_set = active_fd_set;
 		if (select(FD_SETSIZE, &read_fd_set, NULL, NULL, NULL) < 0) {
             perror_exit("select");
 		}
+
+		/* check which children are ready to accept commands */
+		for (i = 0; i < maxReadPipeFd; i++){
+			int child = find_child_of_pipe(fd, childrenTotal, i);
+			if (child != -1 && FD_ISSET(i, &read_fd_set)) {
+				read(i, ready, 1);
+				isChildReady[child] = 1;
+			}
+		}
+
+		//TODO: handle realloc for Commands, and allocate to available children up to max pipe buffer
+		
+		if (select(FD_SETSIZE, &read_fd_set, NULL, NULL, NULL) < 0) {
+            perror_exit("select");
+		}
+
 		/* Service all the sockets with input pending. */
-		for (i = 0; i < FD_SETSIZE; ++i)
+		for (i = 0; i < FD_SETSIZE; i++){
 			if (FD_ISSET(i, &read_fd_set)) {
 				// printf("adding fd: %d\n", i);
 				if (i == sock) {
@@ -147,7 +191,27 @@ void parent_server(int childrenTotal, fd_set active_fd_set, int sock, pid_t *pid
 					allocate_to_children(Command, fd, clientname);
 				}
 			}
+		}
 	}
+}
+
+int find_max_read_pipe(int fd[][2], int childrenTotal){
+	int max = 0;
+	for (int i=0;i<childrenTotal;i++){
+		if (fd[i][0] > max){
+			max = fd[i][0];
+		}
+	}
+	return max;
+}
+
+int find_child_of_pipe(int fd[][2], int childrenTotal, int fdSelected){
+	for (int child = 0;child<childrenTotal;child++){
+		if (fd[child][0] == fdSelected){
+			return child;
+		}
+	}
+	return -1;
 }
 
 int child_server(int *fd){
@@ -478,11 +542,11 @@ int make_socket(uint16_t port){
 	return sock;
 }
 
-pid_t *create_children(int childrenTotal){
+pid_t *create_children(int childrenTotal, int fd[][2]){
 	pid_t pid[childrenTotal];
     for(int j=0;j<childrenTotal;j++) {
 		pid[j] = fork();
-        if(pid[j] == 0) { 
+        if(pid[j] == 0) {	
             // printf("[child] pid %d from [parent] pid %d\n",getpid(),getppid());
             break;
         }else if(pid[j] < 0){

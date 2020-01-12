@@ -23,6 +23,7 @@
 #define GREP_CMD "grep"
 #define TR_CMD "tr"
 #define END_CMD "end"
+#define STOP_CMD "timeToStop"
 
 
 struct InputCommand {
@@ -55,6 +56,7 @@ int find_child_index(pid_t *pid, int childrenTotal);
 void close_unused_parent_ends(int childrenTotal,int fd[][2][2]);
 int find_child_from_process(pid_t *pid, pid_t process, int childrenTotal);
 void terminate_process();
+void close_child_resources(pid_t cpid, int child);
 
 
 static int *g_fdall;
@@ -62,6 +64,8 @@ static fd_set g_socket_fd_set, g_pipe_fd_set;
 static pid_t *g_pid;
 static int g_childrenTotal;
 static int g_continue = 1;
+static int childStop = 0;
+static int g_sock;
 // static int readyChild;
 
 int main(int argc, char *argv[])
@@ -84,6 +88,7 @@ int main(int argc, char *argv[])
 
 	/* Create the TCP socket and set it up to accept connections. */
 	sock = make_socket(port);
+	g_sock = sock;
 	
 
 	/* Initialize the set of reading file descriptors to be monitored by select */
@@ -199,24 +204,47 @@ int fdset_is_empty(fd_set const *fdset){
     return memcmp(fdset, &empty, sizeof(fd_set)) == 0;
 }
 
+void handle_stop(int sig){
+	g_continue = 0;
+	for (int child=0;child<g_childrenTotal;child++){
+		kill(g_pid[child], SIGUSR2);
+		close_child_resources(g_pid[child], child);
+	}
+	shutdown(g_sock, SHUT_RDWR);
+	close(g_sock);
+	_exit(EXIT_SUCCESS);
+}
+
 void handle_end(int sig, siginfo_t *siginfo, void *context){
 	g_continue = 0;
-	if (sig == SIGUSR1){
-		int child = find_child_from_process(g_pid, siginfo->si_pid, g_childrenTotal);
-		// printf ("Closing PID: %ld, child = %d, fd = %d\n", siginfo->si_pid, child, *(g_fdall+child*4+2));
-		FD_CLR(*(g_fdall+child*4+2), &g_pipe_fd_set);
-		close(*(g_fdall+child*4+1));
-		close(*(g_fdall+child*4+1));
-		waitpid(siginfo->si_pid, NULL, 0);
-		// printf("Wait is over...\n");
-		if (fdset_is_empty(&g_pipe_fd_set)){
-			_exit(EXIT_SUCCESS);
-		}
+	// if (sig == SIGUSR1){
+	int child = find_child_from_process(g_pid, siginfo->si_pid, g_childrenTotal);
+	close_child_resources(siginfo->si_pid, child);
+	// int child = find_child_from_process(g_pid, siginfo->si_pid, g_childrenTotal);
+	// // printf ("Closing PID: %ld, child = %d, fd = %d\n", siginfo->si_pid, child, *(g_fdall+child*4+2));
+	// FD_CLR(*(g_fdall+child*4+2), &g_pipe_fd_set);
+	// close(*(g_fdall+child*4+1));
+	// close(*(g_fdall+child*4+1));
+	// waitpid(siginfo->si_pid, NULL, 0);
+	// printf("Wait is over...\n");
+	if (fdset_is_empty(&g_pipe_fd_set)){
+		shutdown(g_sock, SHUT_RDWR);
+		close(g_sock);
+		_exit(EXIT_SUCCESS);
 	}
 }
 
+void close_child_resources(pid_t cpid, int child){
+	// int child = find_child_from_process(g_pid, cpid, g_childrenTotal);
+	// printf ("Closing PID: %ld, child = %d, fd = %d\n", cpid, child, *(g_fdall+child*4+2));
+	FD_CLR(*(g_fdall+child*4+2), &g_pipe_fd_set);
+	close(*(g_fdall+child*4+1));
+	close(*(g_fdall+child*4+1));
+	waitpid(cpid, NULL, 0);
+}
+
 void handleContinueSignal(int sig) {
-	// sleep(3);
+	sleep(1);
 	g_continue = 1;
 }
 
@@ -226,20 +254,26 @@ void parent_server(int childrenTotal, int sock, pid_t *pid, int fd[][2][2]){
 	struct sockaddr_in clientname;
 	size_t size;
 
-	static struct sigaction act;
+	static struct sigaction actEnd, actStop;
  
-	memset (&act, '\0', sizeof(act));
+	memset (&actEnd, '\0', sizeof(actEnd));
+	memset (&actStop, '\0', sizeof(actStop));
  
-	/* Use the sa_sigaction field because the handles has two additional parameters */
-	act.sa_sigaction = &handle_end;
- 
-	/* The SA_SIGINFO flag tells sigaction() to use the sa_sigaction field, not sa_handler. */
-	act.sa_flags = SA_SIGINFO;
+	/* Use sa_sigaction with SA_SIGINFO to check for invoking pid */
+	actEnd.sa_sigaction = &handle_end;
+	actEnd.sa_flags = SA_SIGINFO;
+	sigfillset(&(actEnd.sa_mask)); // ignore everything apart from SIGCONT for syncing
+	sigdelset(&(actEnd.sa_mask), SIGCONT);
 
-	// sigfillset(&(act.sa_mask));
+	actStop.sa_handler = &handle_stop;
+	sigfillset(&(actStop.sa_mask)); // ignore everything else to terminate
 
 	// handle signal for "end" command
-	if (sigaction(SIGUSR1, &act, NULL) < 0) {
+	if (sigaction(SIGUSR1, &actEnd, NULL) < 0) {
+		perror_exit("sigaction");
+	}
+	// handle signal for "timeToStop" command
+	if (sigaction(SIGUSR2, &actStop, NULL) < 0) {
 		perror_exit("sigaction");
 	}
 
@@ -367,6 +401,10 @@ int find_child_of_pipe(int fd[][2][2], int childrenTotal, int fdSelected){
 	return -1;
 }
 
+void handle_stop_child(int sig){
+	childStop = 1;
+}
+
 int child_server(int *fd){
 
 	char *cmd = malloc(MAX_CMD_PLUS_HEADER*sizeof(char));
@@ -375,11 +413,24 @@ int child_server(int *fd){
 	char *result = realloc(NULL, sizeof(char)*(initSize));
 	char * const initialCmd = cmd;
 	char * const initialCmdTmp = cmdTmp;
+	
+	static struct sigaction actChildStop;
+ 
+	memset (&actChildStop, '\0', sizeof(actChildStop));
+
+	actChildStop.sa_handler = &handle_stop_child;
+
+	sigfillset(&(actChildStop.sa_mask)); // ignore everything else to terminate
+
+	// handle signal for "timeToStop" command
+	if (sigaction(SIGUSR2, &actChildStop, NULL) < 0) {
+		perror_exit("sigaction");
+	}
 
 	// printf("writing to fd = %d\n", fd[1]);
 	write(fd[1], "\n", 1);
 
-	while(1){
+	while(!childStop){
 		// resetting pointers
 		cmd = initialCmd;
 		cmdTmp = initialCmdTmp;
@@ -388,8 +439,11 @@ int child_server(int *fd){
 		
 
 		read(fd[0], cmd, MAX_CMD_PLUS_HEADER-1);
+		if (childStop){
+			break;
+		}
 		// sleep(1);
-		printf("After reading from %d...\n", fd[0]);
+		// printf("After reading from %d...\n", fd[0]);
 
 
 		char *port = strsep(&cmd, ";");
@@ -421,7 +475,14 @@ int child_server(int *fd){
 				sprintf(result, "%s;%s;%s", cmdNumber, "1f", "");
 				send_result_with_UDP(port, ip, result, partNum, cmdNumber);
 				break;
+			}else if(strcmp(cmd, STOP_CMD) == 0){
+				kill(getppid(), SIGUSR2);
+				partNum++;
+				sprintf(result, "%s;%s;%s", cmdNumber, "1f", "");
+				send_result_with_UDP(port, ip, result, partNum, cmdNumber);
+				break;
 			}
+
 			kill(getppid(), SIGCONT);
 
 			
@@ -788,10 +849,12 @@ struct InputCommand *read_from_client(int fileDes){
 }
 
 void perror_exit(char *message){
-	if (errno == EPIPE || errno == EINTR){ // ignore broken pipes
+	if (errno == EPIPE || errno == EINTR){ // ignore broken pipes and interrupted select
 		return;
 	}else{
 		perror(message);
+		shutdown(g_sock, SHUT_RDWR);
+		close(g_sock);
 		exit(EXIT_FAILURE);
 	}
 }

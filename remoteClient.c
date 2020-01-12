@@ -52,7 +52,14 @@ void main(int argc, char *argv[])
     }
     size_t cmdTotal = count_lines(fp);
     rewind(fp);
-    
+
+    // printf("cmdTotal=%d\n", cmdTotal);
+
+    if (cmdTotal == 0){
+        printf("Input file is empty.\n");
+        exit(1);
+    }
+
     pid_t *pid = create_children(1);
 
 	if (getpid() == ppid){
@@ -111,6 +118,7 @@ void receive_results(uint16_t clientPort, size_t cmdTotal){
     char resultReceived[cmdTotal+1];
     char expectedResultReceived[cmdTotal+1];
     int partsPerResult[cmdTotal];
+    memset(partsPerResult, 0, cmdTotal*sizeof(int));
 
 
     for (int i = 0; i < cmdTotal; i++){
@@ -123,7 +131,10 @@ void receive_results(uint16_t clientPort, size_t cmdTotal){
     expectedResultReceived[cmdTotal] = '\0';
 
     sock = make_socket(clientPort);
-    int dcout = 0;
+
+    // for (int i =0; i<cmdTotal;i++){
+    //     printf("Receiving command %d with initial parts %d\n", i+1, partsPerResult[i]);
+    // }
 
     while(strcmp(resultReceived, expectedResultReceived) != 0) {
         // printf("resultReceived: '%s' vs expectedResultReceived '%s'\n", resultReceived, expectedResultReceived);
@@ -192,7 +203,7 @@ void merge_files(uint16_t clientPort, size_t cmdTotal, int *partsPerResult){
         char buffer[4097];
 
         FILE* fp_read;
-        printf("Saving command %d with parts %d\n", fiter+1, partsPerResult[fiter]);
+        // printf("Saving command %d with parts %d\n", fiter+1, partsPerResult[fiter]);
         for (int i=0; i<partsPerResult[fiter]; i++) {
                 char fname[16 + count_digits(clientPort) + count_digits(fiter+1) + count_digits(partsPerResult[fiter])]; //output.receive{clientPort}.{cmdNumber}.{partNum}
                 sprintf(fname, "output.receive%u.%d.%d", clientPort, fiter+1, i+1);
@@ -263,6 +274,7 @@ void send_commands(int sock, FILE *fp, int clientPort){
     ssize_t size;
 
     int counter = 0;
+        // printf("Sending command: %s\n",lineBuf);
     while ((size = getline(&line, &len, fp)) != -1){
         counter++;
         char lineBuf[len+18]; // length of line + int counter (10) + two ";" delimiters (2) + port (5) + null termination (1)

@@ -190,7 +190,7 @@ void parent_server(int childrenTotal, fd_set socket_fd_set, fd_set pipe_fd_set, 
 		}
 
 		if (readyChild < childrenTotal){
-			// printf("Before select...");
+			// printf("readyChild=%d\n", readyChild);
 			read_fd_set = socket_fd_set;
 
 			if (select(FD_SETSIZE, &read_fd_set, NULL, NULL, NULL) < 0) {
@@ -216,19 +216,25 @@ void parent_server(int childrenTotal, fd_set socket_fd_set, fd_set pipe_fd_set, 
 						// 	ntohs(clientname.sin_port));
 						FD_SET(new, &socket_fd_set);
 					} else {
-						printf("same fd: %d, sock: %d\n", i, sock);
+						// printf("same fd: %d, sock: %d\n", i, sock);
 						struct InputCommand *Command = read_from_client(i);
 						// for (int i=0; i<Command->numCommand; i++){
 							// printf("cmd: '%s', port '%s'\n", Command->command, Command->clientport);
 						// }
 						if (Command->isCompleted == 1){
-							printf("Closing TCP connection with socket %d...\n", i);
+							// printf("Closing TCP connection with socket %d...\n", i);
 							// fflush(stdout);
 							close(i);
 							FD_CLR(i, &socket_fd_set);
-						}
 
+							// ignore empty line in the end
+							if (Command->clientport  == NULL){
+								break;
+							}
+						}
+						// printf("readyChild=%d\n", readyChild);
 						allocate_to_children(Command, fd, clientname, &readyChild, childrenTotal);
+						break;
 					}
 				}
 			}
@@ -265,8 +271,7 @@ int child_server(int *fd){
 	char * const initialCmd = cmd;
 	char * const initialCmdTmp = cmdTmp;
 
-	// printf("fd = %d\n", fd[1]);
-
+	// printf("writing to fd = %d\n", fd[1]);
 	write(fd[1], "\n", 1);
 
 	while(1){
@@ -278,7 +283,7 @@ int child_server(int *fd){
 		
 
 		read(fd[0], cmd, MAX_CMD_PLUS_HEADER-1);
-		printf("After reading from %d...\n", fd[0]);
+		// printf("After reading from %d...\n", fd[0]);
 
 
 		char *port = strsep(&cmd, ";");
@@ -365,7 +370,7 @@ int child_server(int *fd){
 						}else if (partNum > 0){ // finish flag
 							resultPtr = resultPtr - (MAX_MSG + 1);
 							sprintf(resultPtr, "%s;%d%c;%s", cmdNumber, partNum, 'f', buffer);
-							printf("%s\n", result);
+							// printf("%s\n", result);
 							break;
 						}else{
 							partNum++;
@@ -443,7 +448,7 @@ void send_result_with_UDP(char *port, char *ip, char *result, size_t packetNum, 
 
 	for (int i=0;i<packetNum;i++){
 		// if (i+1 == 1){
-		// 	printf("%s with cmdNumber='%s'\n", result+i*(MAX_MSG+1), cmdNumber);
+			// printf("%s with cmdNumber='%s'\n", result+i*(MAX_MSG+1), cmdNumber);
 		// }
 		if (sendto(sock, result+i*(MAX_MSG+1), MAX_MSG, 0, serverPtr, serverlen) < 0) {
 			perror_exit("sendto");
@@ -464,33 +469,45 @@ void remove_invalid_pipe_commands(char **cmd){
 
 	while(firstCmd != NULL){
 		char *tmpPtr = firstCmd;
-		// printf("tmpPtr: %s\n", tmpPtr);
+		// printf("tmpPtr: %s\n", *cmd);
 
 		while(*tmpPtr == ' '){
 			tmpPtr++;
 		}
-		// printf("tmpPtr: %s\n", tmpPtr);
+		// printf("tmpPtr: %s\n", *cmd);
 
 		strncpy(name, tmpPtr, 4);
+
+		for (int i=0;i<strlen(name);i++){
+			if (name[i] == ' '){
+				name[i] = '\0';
+			}
+		}
 		// printf("%c", name[0]);
 		// name[0] = tmpPtr[0];
 		// name[1] = tmpPtr[1];
 		// name[2] = tmpPtr[2];
 		// name[3] = '\0';
 		to_lowercase(&name);
+		// printf("name: %s\n", *cmd);
 		if (strcmp(name, LS_CMD) != 0 
 			&& strcmp(name, CAT_CMD) != 0 
 			&& strcmp(name, CUT_CMD) != 0 
 			&& strcmp(name, GREP_CMD) != 0 
 			&& strcmp(name, TR_CMD)!= 0){
 				(*cmd) = initialPtr;
-				break;
+				free(name);
+				return;
 		}
 
 		*(firstCmd-1)='|';
 		firstCmd = strsep(cmd, "\n");
+		// printf("firstCmd: %s\n", *cmd);
 	}
+	// if while finished, initial cmd was ok
+	(*cmd) = initialPtr; 
 	free(name);
+	return;
 }
 
 void replace_unquoted_pipes_with_newline(char **cmd){
@@ -553,11 +570,12 @@ void allocate_to_children(struct InputCommand *Command, int fd[][2][2], struct s
 	// int maxWrapperSize = MAX_CMD+50;
 	char cmdbuf[MAX_CMD_PLUS_HEADER];
 	snprintf(cmdbuf, MAX_CMD_PLUS_HEADER-1, "%s;%s;%s;%s", Command->clientport, inet_ntoa(clientname.sin_addr), Command->cmdNumber, Command->command);
+	// printf("writing to child %d fd = %d\n", *readyChild, fd[*readyChild][0][1]);
 	if (write(fd[*readyChild][0][1], cmdbuf, MAX_CMD_PLUS_HEADER-1) == -1){
 		perror_exit("write of allocate_to_children");
 	}
-	printf("'%s'\n", cmdbuf);
-	*readyChild=childrenTotal;
+	// printf("'%s'\n", cmdbuf);
+	*readyChild=childrenTotal; // child occupied
 	free(Command->initialPtr);
 	free(Command);
 }
@@ -631,7 +649,7 @@ struct InputCommand *read_from_client(int fileDes){
 	Command->clientport = strsep(&Command->command, ";");
 	
 	// printf("'%s' as: '%d'\n", Command->command, Command->cmdNumber);
-	printf("readResult=%d\n", readResult);
+	// printf("readResult=%d\n", readResult);
 	// client finish, close connection
 	if (readResult == 0){
 		Command->isCompleted = 1;

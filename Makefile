@@ -7,5 +7,5 @@ install: build
 
 clean:
 	rm -r ./output.receive*
-	killall [r]emoteServer
 	killall [r]emoteClient
+	killall [r]emoteServer

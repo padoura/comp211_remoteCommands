@@ -175,7 +175,7 @@ void receive_results(uint16_t clientPort, size_t cmdTotal){
         fprintf(fp, cmdResult);
         fclose(fp);
 
-        printf("Receiving command %s with parts %s and converted %d and %d\n", cmdNumber, partNum, atoi(partNum), atoi(cmdNumber)-1);
+        // printf("Receiving command %s with parts %s and converted %d and %d\n", cmdNumber, partNum, atoi(partNum), atoi(cmdNumber)-1);
         partsPerResult[atoi(cmdNumber)-1] = atoi(partNum) > partsPerResult[atoi(cmdNumber)-1] ?  atoi(partNum) : partsPerResult[atoi(cmdNumber)-1];
         if (isFinalCmd == 1){
             *(resultReceived+atoi(cmdNumber)-1) = '1';

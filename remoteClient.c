@@ -242,7 +242,7 @@ int make_socket(uint16_t port){
     serverlen = sizeof(server);
 
     struct timeval tv;
-    tv.tv_sec = 10;
+    tv.tv_sec = 20;
     tv.tv_usec = 0;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
 

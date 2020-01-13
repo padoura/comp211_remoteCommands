@@ -66,6 +66,9 @@ static int g_childrenTotal;
 static int g_continue = 1;
 static int childStop = 0;
 static int g_sock;
+static int g_maxSockFd;
+static int g_iPipe = 0;
+static int g_iSock = 0;
 
 int main(int argc, char *argv[])
 {
@@ -88,6 +91,7 @@ int main(int argc, char *argv[])
 	/* Create the TCP socket and set it up to accept connections. */
 	sock = make_socket(port);
 	g_sock = sock;
+	g_maxSockFd = sock;
 	
 
 	/* Initialize the set of reading file descriptors to be monitored by select */
@@ -213,6 +217,7 @@ void handle_end(int sig, siginfo_t *siginfo, void *context){
 		close(g_sock);
 		_exit(EXIT_SUCCESS);
 	}
+	sleep(1);
 }
 
 void close_child_resources(pid_t cpid, int child){
@@ -223,13 +228,11 @@ void close_child_resources(pid_t cpid, int child){
 }
 
 void handleContinueSignal(int sig) {
-	sleep(1);
 	g_continue = 1;
 }
 
 void parent_server(int childrenTotal, int sock, pid_t *pid, int fd[][2][2]){
 	fd_set read_fd_set;
-	int i;
 	struct sockaddr_in clientname;
 	size_t size;
 
@@ -263,23 +266,32 @@ void parent_server(int childrenTotal, int sock, pid_t *pid, int fd[][2][2]){
 	int readyChild = childrenTotal;
 
 	while (1) {
+
+		//reset counters
+		if (g_iPipe == maxReadPipeFd+1){
+			g_iPipe = 0;
+		}
+		if (g_iSock == g_maxSockFd+1){
+			g_iSock = 0;
+		}
+
 		if (g_continue == 1){
 			/* Block until input arrives */
 
 			if (readyChild == childrenTotal){
 				read_fd_set = g_pipe_fd_set;
 
-				if (select(FD_SETSIZE, &read_fd_set, NULL, NULL, NULL) < 0) {
+				if (select(maxReadPipeFd+1, &read_fd_set, NULL, NULL, NULL) < 0) {
 					perror_exit("select");
 				}
 
 
 				/* check which children are ready to accept commands */
-				for (i = 0; i < maxReadPipeFd+1; i++){
-					int child = find_child_of_pipe(fd, childrenTotal, i);
+				for (g_iPipe; g_iPipe < maxReadPipeFd+1; g_iPipe++){
+					int child = find_child_of_pipe(fd, childrenTotal, g_iPipe);
 
-					if (child != -1 && FD_ISSET(i, &read_fd_set)) {
-						read(i, ready, 1);
+					if (child != -1 && FD_ISSET(g_iPipe, &read_fd_set)) {
+						read(g_iPipe, ready, 1);
 						readyChild = child;
 						break;
 					}
@@ -290,15 +302,15 @@ void parent_server(int childrenTotal, int sock, pid_t *pid, int fd[][2][2]){
 
 				read_fd_set = g_socket_fd_set;
 
-				if (select(FD_SETSIZE, &read_fd_set, NULL, NULL, NULL) < 0) {
+				if (select(g_maxSockFd+1, &read_fd_set, NULL, NULL, NULL) < 0) {
 					perror_exit("select");
 				}
 
 				/* Service all the sockets with input pending. */
-				for (i = 0; i < FD_SETSIZE; i++){
-					if (FD_ISSET(i, &read_fd_set)) {
+				for (g_iSock; g_iSock < g_maxSockFd+1; g_iSock++){
+					if (FD_ISSET(g_iSock, &read_fd_set)) {
 
-						if (i == sock) {
+						if (g_iSock == sock) {
 							/* Connection request on original socket. */
 							int new;
 							size = sizeof(clientname);
@@ -306,16 +318,19 @@ void parent_server(int childrenTotal, int sock, pid_t *pid, int fd[][2][2]){
 							if (new < 0) {
 								perror_exit("accept");
 							}
+							if (new > g_maxSockFd){
+								g_maxSockFd = new;
+							}
 
 							FD_SET(new, &g_socket_fd_set);
 						} else {
 
 							g_continue = 0;
-							struct InputCommand *Command = read_from_client(i);
+							struct InputCommand *Command = read_from_client(g_iSock);
 
 							if (Command->isCompleted == 1){
-								close(i);
-								FD_CLR(i, &g_socket_fd_set);
+								close(g_iSock);
+								FD_CLR(g_iSock, &g_socket_fd_set);
 
 								// ignore empty line in the end
 								if (Command->clientport  == NULL){

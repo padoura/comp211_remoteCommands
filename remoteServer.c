@@ -66,7 +66,6 @@ static int g_childrenTotal;
 static int g_continue = 1;
 static int childStop = 0;
 static int g_sock;
-// static int readyChild;
 
 int main(int argc, char *argv[])
 {
@@ -97,7 +96,6 @@ int main(int argc, char *argv[])
 	FD_ZERO(&g_pipe_fd_set);
 
 	// initialize pipes
-	// int fd[2];
 	int fdall[childrenTotal][2][2];
 	for (int i=0;i<childrenTotal;i++){
 		// write to child pipe
@@ -109,7 +107,6 @@ int main(int argc, char *argv[])
 			perror_exit("pipe"); 
 		}
 		FD_SET(fdall[i][1][0], &g_pipe_fd_set); // let select monitor reading ends
-		// printf("for parent -> r-write:%d w-write:%d r-read:%d w-read:%d\n", fdall[i][0][0],fdall[i][0][1], fdall[i][1][0],fdall[i][1][1]);
 	}
 
 	g_fdall = malloc(sizeof(int)*2*2*childrenTotal);
@@ -118,10 +115,6 @@ int main(int argc, char *argv[])
 		memcpy(g_fdall + child*4 + 1, &fdall[child][0][1], sizeof(int));
 		memcpy(g_fdall + child*4 + 2, &fdall[child][1][0], sizeof(int));
 		memcpy(g_fdall + child*4 + 3, &fdall[child][1][1], sizeof(int));
-		// printf("write-parent r: %d\n",*(g_fdall + child*4 + 0));
-		// printf("write-parent w: %d\n",*(g_fdall + child*4 + 1));
-		// printf("read-parent r: %d\n",*(g_fdall + child*4 + 2));
-		// printf("read-parent w: %d\n",*(g_fdall + child*4 + 3));
 	}
 
 
@@ -129,7 +122,6 @@ int main(int argc, char *argv[])
 	if (listen(sock, 1) < 0) {
         perror_exit("listen");
 	}
-	// printf("Listening for connections to port %d with total children processes: %d\n", port, childrenTotal);
 	pid_t pid[childrenTotal];
 	memset(pid, -1, childrenTotal*sizeof(pid_t));
 	create_children(childrenTotal, pid);
@@ -153,7 +145,6 @@ int main(int argc, char *argv[])
 
 void close_unused_parent_ends(int childrenTotal,int fd[][2][2]){
 	for (int i=0;i<childrenTotal;i++){
-		// printf("Parent closing %d and %d\n", fd[i][0][0], fd[i][1][1]);
 		close(fd[i][0][0]); //read end for parent writing pipe
 		close(fd[i][1][1]); //write end for parent reading pipe
 	}
@@ -172,25 +163,21 @@ void keep_one_child_per_pipe(pid_t *pid, int childrenTotal, int fdall[][2][2], i
 	int child = find_child_index(pid, childrenTotal);
 	for (int j=0;j<childrenTotal;j++){
 		if (child != j){
-			// printf("Child closing %d, %d, %d and %d\n", fdall[j][0][0], fdall[j][0][1], fdall[j][1][0], fdall[j][1][1]);
 			close(fdall[j][0][0]);
 			close(fdall[j][0][1]);
 			close(fdall[j][1][0]);
 			close(fdall[j][1][1]);
 		}
 	}
-	// printf("Child closing its %d and %d\n", fdall[child][0][1], fdall[child][1][0]);
 	close(fdall[child][0][1]); //write end for parent writing pipe
 	close(fdall[child][1][0]); //read end for parent reading pipe
 	fdChild[0]=fdall[child][0][0]; //read end for parent writing pipe
 	fdChild[1]=fdall[child][1][1]; //write end for parent reading pipe
-	// printf("child = '%d', r = '%d', w = '%d'\n", getpid(), fd[0], fd[1]);
 }
 
 int find_child_from_process(pid_t *pid, pid_t process, int childrenTotal){
 	int child = -1;
 	for (int i=0;i<childrenTotal;i++){
-		// printf("%d==%d\n", pid[i], process);
 		if (pid[i] == process){
 			child = i;
 			break;
@@ -210,6 +197,8 @@ void handle_stop(int sig){
 		kill(g_pid[child], SIGUSR2);
 		close_child_resources(g_pid[child], child);
 	}
+	free(g_fdall);
+	free(g_pid);
 	shutdown(g_sock, SHUT_RDWR);
 	close(g_sock);
 	_exit(EXIT_SUCCESS);
@@ -217,16 +206,8 @@ void handle_stop(int sig){
 
 void handle_end(int sig, siginfo_t *siginfo, void *context){
 	g_continue = 0;
-	// if (sig == SIGUSR1){
 	int child = find_child_from_process(g_pid, siginfo->si_pid, g_childrenTotal);
 	close_child_resources(siginfo->si_pid, child);
-	// int child = find_child_from_process(g_pid, siginfo->si_pid, g_childrenTotal);
-	// // printf ("Closing PID: %ld, child = %d, fd = %d\n", siginfo->si_pid, child, *(g_fdall+child*4+2));
-	// FD_CLR(*(g_fdall+child*4+2), &g_pipe_fd_set);
-	// close(*(g_fdall+child*4+1));
-	// close(*(g_fdall+child*4+1));
-	// waitpid(siginfo->si_pid, NULL, 0);
-	// printf("Wait is over...\n");
 	if (fdset_is_empty(&g_pipe_fd_set)){
 		shutdown(g_sock, SHUT_RDWR);
 		close(g_sock);
@@ -235,8 +216,6 @@ void handle_end(int sig, siginfo_t *siginfo, void *context){
 }
 
 void close_child_resources(pid_t cpid, int child){
-	// int child = find_child_from_process(g_pid, cpid, g_childrenTotal);
-	// printf ("Closing PID: %ld, child = %d, fd = %d\n", cpid, child, *(g_fdall+child*4+2));
 	FD_CLR(*(g_fdall+child*4+2), &g_pipe_fd_set);
 	close(*(g_fdall+child*4+1));
 	close(*(g_fdall+child*4+1));
@@ -279,66 +258,46 @@ void parent_server(int childrenTotal, int sock, pid_t *pid, int fd[][2][2]){
 
 	signal(SIGCONT, handleContinueSignal);
 
-	// // handle signal for terminating commands
-	// signal(SIGUSR1, handle_end); // "end"
-	// signal(SIGUSR2, handle_end); // "timeToStop"
-
 	const int maxReadPipeFd = find_max_read_pipe(fd, childrenTotal);
 	char ready[2];
 	int readyChild = childrenTotal;
 
-	// wait(NULL);
-
-	// for (int child = 0;child<childrenTotal;child++){
-	// 	printf("write-parent r: %d\n",*(g_fdall + child*4 + 0));
-	// 	printf("write-parent w: %d\n",*(g_fdall + child*4 + 1));
-	// 	printf("read-parent r: %d\n",*(g_fdall + child*4 + 2));
-	// 	printf("read-parent w: %d\n",*(g_fdall + child*4 + 3));
-	// }
-
 	while (1) {
 		if (g_continue == 1){
 			/* Block until input arrives */
-			
-			// printf("readyChild=%d\n", readyChild);
-
 
 			if (readyChild == childrenTotal){
 				read_fd_set = g_pipe_fd_set;
-				// printf("Testing2\n");
+
 				if (select(FD_SETSIZE, &read_fd_set, NULL, NULL, NULL) < 0) {
 					perror_exit("select");
 				}
-				// printf("Testing3\n");
 
 
 				/* check which children are ready to accept commands */
 				for (i = 0; i < maxReadPipeFd+1; i++){
 					int child = find_child_of_pipe(fd, childrenTotal, i);
-					// printf("child=%d\n", child);
+
 					if (child != -1 && FD_ISSET(i, &read_fd_set)) {
 						read(i, ready, 1);
 						readyChild = child;
-						// printf("readyChild %d wrote data and parent will read from %d\n", readyChild, i);
 						break;
 					}
 				}
 			}
 
 			if (readyChild < childrenTotal){
-				// printf("readyChild=%d\n", readyChild);
+
 				read_fd_set = g_socket_fd_set;
 
 				if (select(FD_SETSIZE, &read_fd_set, NULL, NULL, NULL) < 0) {
 					perror_exit("select");
 				}
 
-				// printf("After select...");
-
 				/* Service all the sockets with input pending. */
 				for (i = 0; i < FD_SETSIZE; i++){
 					if (FD_ISSET(i, &read_fd_set)) {
-						// printf("adding fd: %d\n", i);
+
 						if (i == sock) {
 							/* Connection request on original socket. */
 							int new;
@@ -347,20 +306,14 @@ void parent_server(int childrenTotal, int sock, pid_t *pid, int fd[][2][2]){
 							if (new < 0) {
 								perror_exit("accept");
 							}
-							// printf("Server: connect from host %s port %d.\n",
-							// 	inet_ntoa(clientname.sin_addr),
-							// 	ntohs(clientname.sin_port));
+
 							FD_SET(new, &g_socket_fd_set);
 						} else {
-							// printf("same fd: %d, sock: %d\n", i, sock);
+
 							g_continue = 0;
 							struct InputCommand *Command = read_from_client(i);
-							// for (int i=0; i<Command->numCommand; i++){
-								// printf("cmd: '%s', port '%s'\n", Command->command, Command->clientport);
-							// }
+
 							if (Command->isCompleted == 1){
-								// printf("Closing TCP connection with socket %d...\n", i);
-								// fflush(stdout);
 								close(i);
 								FD_CLR(i, &g_socket_fd_set);
 
@@ -369,9 +322,7 @@ void parent_server(int childrenTotal, int sock, pid_t *pid, int fd[][2][2]){
 									break;
 								}
 							}
-							// printf("readyChild=%d\n", readyChild);
 							allocate_to_children(Command, fd, clientname, &readyChild, childrenTotal);
-							// pause();
 							break;
 						}
 					}
@@ -393,7 +344,6 @@ int find_max_read_pipe(int fd[][2][2], int childrenTotal){
 
 int find_child_of_pipe(int fd[][2][2], int childrenTotal, int fdSelected){
 	for (int child = 0;child<childrenTotal;child++){
-		// printf("%d=%d\n", fd[child][1][0], fdSelected);
 		if (fd[child][1][0] == fdSelected){
 			return child;
 		}
@@ -427,7 +377,6 @@ int child_server(int *fd){
 		perror_exit("sigaction");
 	}
 
-	// printf("writing to fd = %d\n", fd[1]);
 	write(fd[1], "\n", 1);
 
 	while(!childStop){
@@ -442,16 +391,11 @@ int child_server(int *fd){
 		if (childStop){
 			break;
 		}
-		// sleep(1);
-		// printf("After reading from %d...\n", fd[0]);
 
 
 		char *port = strsep(&cmd, ";");
 		char *ip = strsep(&cmd, ";");
 		char *cmdNumber = strsep(&cmd, ";");
-
-		// if (i+1 == 1){
-		// }
 
 		/* adding headers
 		The transferred message has the form:
@@ -468,7 +412,7 @@ int child_server(int *fd){
 			remove_leading_spaces(&cmd);
 			remove_trailing_spaces(&cmd);
 
-
+			//terminating commands
 			if (strcmp(cmd, END_CMD) == 0){
 				kill(getppid(), SIGUSR1);
 				partNum++;
@@ -487,11 +431,9 @@ int child_server(int *fd){
 
 			
 			// Command empty (in case client side allows that)
-			printf("%s\n",cmd);
 			if (!*cmd){
 				partNum++;
 				sprintf(result, "%s;%s;%s", cmdNumber, "1f", "");
-				// printf("%s\n",result);
 			}else{
 				
 				memcpy(cmdTmp, cmd, MAX_CMD_PLUS_HEADER*sizeof(char));
@@ -510,16 +452,11 @@ int child_server(int *fd){
 					sprintf(result, "%s;%s;%s", cmdNumber, "1f", "");
 				}else{ // command acceptable, proceed with popen
 
-					// printf("%d -> %s\n", getpid(), cmdNumber);
 					remove_invalid_pipe_commands(&cmd);
-
-					// fflush(stdout);
-
 
 					// ignore stderr
 					sprintf(cmd+strlen(cmd), " 2>/dev/null");
 					
-					// printf("cmd: '%s'\n", cmd);
 					FILE *pipe_fp;
 					if ((pipe_fp = popen(cmd, "r")) == NULL ){
 						perror_exit("popen");
@@ -540,7 +477,6 @@ int child_server(int *fd){
 							}
 							resultPtr = result + partNum*(MAX_MSG + 1); // each part of message has MAX_MSG characters + null termination
 							// digits increased for storing partNum
-							// printf("%s;%s;%s;%d;%s\n",port, ip, cmdNumber, partNum);
 							if (count_digits(partNum) != count_digits(partNum-1)){
 								iterSize -= 1;
 							}
@@ -548,7 +484,6 @@ int child_server(int *fd){
 						}else if (partNum > 0){ // finish flag
 							resultPtr = resultPtr - (MAX_MSG + 1);
 							sprintf(resultPtr, "%s;%d%c;%s", cmdNumber, partNum, 'f', buffer);
-							// printf("%s\n", result);
 							break;
 						}else{
 							partNum++;
@@ -560,19 +495,8 @@ int child_server(int *fd){
 				}
 			}
 		}
-		
-		// printf("result: '%s'\n", result);
-		// fflush(stdout);
-		// printf("%s;%s;%s;%d\n",port, ip, cmdNumber, partNum);
 		send_result_with_UDP(port, ip, result, partNum, cmdNumber);
-
-		// // let child die if parent dies unexpectedly, 1 -> init process
-		// if (getppid() <= 1){
-		// 	break;
-		// }
-
 		write(fd[1], "1", 1);
-		
 	}
 
 	close(fd[0]);
@@ -636,9 +560,6 @@ void send_result_with_UDP(char *port, char *ip, char *result, size_t packetNum, 
 	}
 
 	for (int i=0;i<packetNum;i++){
-		// if (i+1 == 1){
-			// printf("%s with cmdNumber='%s'\n", result+i*(MAX_MSG+1), cmdNumber);
-		// }
 		if (sendto(sock, result+i*(MAX_MSG+1), MAX_MSG, 0, serverPtr, serverlen) < 0) {
 			perror_exit("sendto");
 		}
@@ -658,12 +579,10 @@ void remove_invalid_pipe_commands(char **cmd){
 
 	while(firstCmd != NULL){
 		char *tmpPtr = firstCmd;
-		// printf("tmpPtr: %s\n", *cmd);
 
 		while(*tmpPtr == ' '){
 			tmpPtr++;
 		}
-		// printf("tmpPtr: %s\n", *cmd);
 
 		strncpy(name, tmpPtr, 4);
 
@@ -672,13 +591,9 @@ void remove_invalid_pipe_commands(char **cmd){
 				name[i] = '\0';
 			}
 		}
-		// printf("%c", name[0]);
-		// name[0] = tmpPtr[0];
-		// name[1] = tmpPtr[1];
-		// name[2] = tmpPtr[2];
-		// name[3] = '\0';
+
 		to_lowercase(&name);
-		// printf("name: %s\n", *cmd);
+
 		if (strcmp(name, LS_CMD) != 0 
 			&& strcmp(name, CAT_CMD) != 0 
 			&& strcmp(name, CUT_CMD) != 0 
@@ -691,7 +606,6 @@ void remove_invalid_pipe_commands(char **cmd){
 
 		*(firstCmd-1)='|';
 		firstCmd = strsep(cmd, "\n");
-		// printf("firstCmd: %s\n", *cmd);
 	}
 	// if while finished, initial cmd was ok
 	(*cmd) = initialPtr; 
@@ -756,14 +670,11 @@ void to_lowercase(char** line){
 }
 
 void allocate_to_children(struct InputCommand *Command, int fd[][2][2], struct sockaddr_in clientname, int *readyChild, int childrenTotal){
-	// int maxWrapperSize = MAX_CMD+50;
 	char cmdbuf[MAX_CMD_PLUS_HEADER];
 	snprintf(cmdbuf, MAX_CMD_PLUS_HEADER-1, "%s;%s;%s;%s", Command->clientport, inet_ntoa(clientname.sin_addr), Command->cmdNumber, Command->command);
-	printf("writing to child %d fd = %d\n", *readyChild, fd[*readyChild][0][1]);
 	if (write(fd[*readyChild][0][1], cmdbuf, MAX_CMD_PLUS_HEADER-1) == -1){
 		perror_exit("write of allocate_to_children");
 	}
-	printf("'%s'\n", cmdbuf);
 	*readyChild=childrenTotal; // child occupied
 	free(Command->initialPtr);
 	free(Command);
@@ -806,8 +717,7 @@ int make_socket(uint16_t port){
 void create_children(int childrenTotal, pid_t *pid){
     for(int j=0;j<childrenTotal;j++) {
 		pid[j] = fork();
-        if(pid[j] == 0) {	
-            // printf("[child] pid %d from [parent] pid %d\n",getpid(),getppid());
+        if(pid[j] == 0) {
             break;
         }else if(pid[j] < 0){
             perror_exit("fork");
@@ -822,7 +732,6 @@ struct InputCommand *read_from_client(int fileDes){
 	ssize_t readResult;
 	struct InputCommand *Command = malloc(sizeof(struct InputCommand));
 	Command->command = realloc(NULL, sizeof(char)*initSize);
-	// printf("Socket %d sent command:\n", fileDes);
     while ((readResult = read(fileDes, buf, 1) > 0) && buf[0] != '\n'){/* Receive 1 char */
 		Command->command[len++]=buf[0];
         if(len==initSize){
@@ -837,8 +746,6 @@ struct InputCommand *read_from_client(int fileDes){
 	Command->cmdNumber = strsep(&Command->command, ";");
 	Command->clientport = strsep(&Command->command, ";");
 	
-	// printf("'%s' as: '%d'\n", Command->command, Command->cmdNumber);
-	// printf("readResult=%d\n", readResult);
 	// client finish, close connection
 	if (readResult == 0){
 		Command->isCompleted = 1;
@@ -852,7 +759,7 @@ void perror_exit(char *message){
 	if (errno == EPIPE || errno == EINTR){ // ignore broken pipes and interrupted select
 		return;
 	}else{
-		perror(message);
+		// perror(message);
 		shutdown(g_sock, SHUT_RDWR);
 		close(g_sock);
 		exit(EXIT_FAILURE);
